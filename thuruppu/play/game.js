@@ -45,7 +45,7 @@ const TARGET = 12;
 // The one version for the web link and the Android/iOS app (shown in the menu).
 // android/app/build.gradle reads `name` and `build` from this line, so keep its shape.
 // Bump `build` on every publish; bump `name` for each release (1.0.2 -> 1.0.3 for fixes, 1.1.0 for features).
-const APP_VERSION = { name: '1.3.1', build: 7, date: '21 Nov 2026', note: 'Career score; your Joker shows in your name' };
+const APP_VERSION = { name: '1.3.1', build: 8, date: '21 Nov 2026', note: 'Career score; your Joker shows in your name' };
 const SPEEDS = { normal: { bot: 850, trick: 1500 }, fast: { bot: 420, trick: 900 } };
 const SAVE_KEY = 'thuruppu56.save.v1';
 const SPEED_KEY = 'thuruppu56.speed';
