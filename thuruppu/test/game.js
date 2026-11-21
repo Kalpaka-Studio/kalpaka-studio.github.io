@@ -36,7 +36,7 @@ applyTeams();
 // The one version for the web link and the Android/iOS app (shown in the menu).
 // android/app/build.gradle reads `name` and `build` from this line, so keep its shape.
 // Bump `build` on every publish; bump `name` for each release (1.0.2 -> 1.0.3 for fixes, 1.1.0 for features).
-const APP_VERSION = { name: '1.4.0', build: 9, date: '21 Nov 2026', note: 'Test: play with friends online' };
+const APP_VERSION = { name: '1.4.0', build: 10, date: '21 Nov 2026', note: 'Test: play with friends online' };
 const SPEEDS = { normal: { bot: 850, trick: 1500 }, fast: { bot: 420, trick: 900 } };
 const SAVE_KEY = 'thuruppu56.save.v1';
 const SPEED_KEY = 'thuruppu56.speed';
@@ -823,7 +823,7 @@ function myPid() {
   if (!id) { id = 'p' + Array.from(crypto.getRandomValues(new Uint8Array(12)), b => (b % 36).toString(36)).join(''); lsSet(PID_KEY, id); }
   return id;
 }
-const onlineName = () => lsGet(ONAME_KEY) || (NAMES[0] !== 'You' ? NAMES[0] : '');
+const onlineName = () => lsGet(ONAME_KEY) || (!NET.on && NAMES[0] !== 'You' ? NAMES[0] : '');
 const savedTable = () => { try { return JSON.parse(lsGet(ONLINE_KEY) || 'null'); } catch (e) { return null; } };
 const netSeat = p => NET.msg && NET.msg.seats[(p + NET.msg.you) % 6];
 function netSend(m) { try { if (NET.ws && NET.ws.readyState === 1) NET.ws.send(JSON.stringify(m)); } catch (e) { /* reconnects */ } }
@@ -863,6 +863,7 @@ function readOnlineName() {
   const el = document.getElementById('onName');
   const name = ((el && el.value) || '').trim().slice(0, NAME_MAX);
   if (!name) { UI.netErr = 'Enter your name first.'; renderOverlay(); return null; }
+  if (/^(you|me|player)$/i.test(name)) { UI.netErr = 'Please enter your own name, so the others know who you are.'; renderOverlay(); return null; }
   lsSet(ONAME_KEY, name);
   return name;
 }
@@ -947,7 +948,7 @@ function onNetMessage(m) {
     return;
   }
   // Playing: show the table from our seat.
-  NAMES = [0, 1, 2, 3, 4, 5].map(i => i === 0 ? 'You' : m.seats[(i + m.you) % 6].name);
+  NAMES = [0, 1, 2, 3, 4, 5].map(i => m.seats[(i + m.you) % 6].name);   // real names for everyone, you included
   TEAMS = { drawn: true, black: m.black };
   applyTeams();
   const g = m.game;
