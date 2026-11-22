@@ -495,12 +495,14 @@ function endRound() {
 
 // ---------- Kitty & Joker scoring ----------
 // Each team starts with 7 kitty cards; the round's loser pays the winners as many cards as the game points.
-// A team that runs out gets a Joker on every member (they stack) and the kitty is shared 7 and 7 again.
+// A team that can't pay in full (owes more cards than it has; 0 left is still fine) gets a Joker on every
+// member (they stack) and the kitty is shared 7 and 7 again.
 // Jokers come off by winning the bidding and making it: in the very first round after the latest Joker
 // every member drops one; later, only the player who made the winning bid drops one of their own.
 const isKitty = () => !!(G && G.mode === 'kitty');
 function settleKitty(R) {
   const r = R.result, loser = 1 - r.to, bt = r.bt;
+  const short = r.gain > G.kitty[loser];             // can't pay in full: that's what earns the Joker (0 left is fine)
   const paid = Math.min(r.gain, G.kitty[loser]);
   G.kitty[loser] -= paid; G.kitty[r.to] += paid;
   r.kitty = { paid, from: loser, after: G.kitty.slice() };
@@ -519,14 +521,15 @@ function settleKitty(R) {
   }
   G.jokerFresh = [false, false];                     // the "first round after" chance is used up either way
 
-  // 2. Running out: Joker for the whole team, kitty shared out again.
+  // 2. Can't pay: Joker for the whole team, kitty shared out again. A team left on 0 plays on and can climb back;
+  //    it only gets the Joker when it loses a round and has fewer cards than it owes.
   r.jokerTo = null;
-  if (G.kitty[loser] === 0) {
+  if (short) {
     seatsOf(loser).forEach(s => G.joker[s]++);
     G.jokerFresh[loser] = true;
     G.kitty = [7, 7];
     r.jokerTo = loser;
-    log(`🃏 <b>${tn(loser)} ran out of kitty cards and ${tv(loser, 'gets', 'get')} a Joker!</b> Kitty shared out 7 and 7 again.`);
+    log(`🃏 <b>${tn(loser)} couldn't pay in full and ${tv(loser, 'gets', 'get')} a Joker!</b> Kitty shared out 7 and 7 again.`);
   }
   if (r.jokerTo != null || r.jokerOff.length) emit('flash', { label: r.jokerTo != null ? 'Joker for' : 'Joker removed',
     big: r.jokerTo != null ? `${tsy(r.jokerTo)} 🃏` : '🃏' });
