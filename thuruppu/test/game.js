@@ -36,8 +36,14 @@ applyTeams();
 // The one version for the web link and the Android/iOS app (shown in the menu).
 // android/app/build.gradle reads `name` and `build` from this line, so keep its shape.
 // Bump `build` on every publish; bump `name` for each release (1.0.2 -> 1.0.3 for fixes, 1.1.0 for features).
-const APP_VERSION = { name: '1.4.0', build: 10, date: '21 Nov 2026', note: 'Test: play with friends online' };
-const SPEEDS = { normal: { bot: 850, trick: 1500 }, fast: { bot: 420, trick: 900 } };
+const APP_VERSION = { name: '1.4.0', build: 11, date: '22 Nov 2026', note: 'Test: play with friends online; slow bot speed' };
+// How long each automatic step waits (ms). The online server uses the same multipliers (SPEED_X there).
+const SPEEDS = {
+  slow: { bot: 1500, trick: 2500, botCard: 1100, decided: 3400 },
+  normal: { bot: 850, trick: 1500, botCard: 700, decided: 2400 },
+  fast: { bot: 420, trick: 900, botCard: 700, decided: 2400 },
+};
+const SPEED_LABEL = { slow: 'Slow', normal: 'Normal', fast: 'Fast' };
 const SAVE_KEY = 'thuruppu56.save.v1';
 const SPEED_KEY = 'thuruppu56.speed';
 
@@ -45,7 +51,7 @@ const SPEED_KEY = 'thuruppu56.speed';
 // ---------- State ----------
 let timer = null;
 let speed = 'normal';
-try { if (localStorage.getItem(SPEED_KEY) === 'fast') speed = 'fast'; } catch (e) { /* storage blocked */ }
+try { const s = localStorage.getItem(SPEED_KEY); if (SPEEDS[s]) speed = s; } catch (e) { /* storage blocked */ }
 const SCORING_KEY = 'thuruppu56.scoring';
 let scoring = 'twelve';                     // 'twelve' = first to 12, 'kitty' = Kitty & Joker
 try { if (localStorage.getItem(SCORING_KEY) === 'kitty') scoring = 'kitty'; } catch (e) { /* storage blocked */ }
@@ -96,8 +102,8 @@ Engine.emit = (type, d) => {
   else if (type === 'roundEnd') { addCareer(d); UI.overlay = 'round'; }
 };
 const STEP_DELAY = {
-  bot: () => delay('bot'), botTrump: () => delay('bot') + 300, botCard: () => 700,
-  trick: () => delay('trick'), decided: () => 2400,
+  bot: () => delay('bot'), botTrump: () => delay('bot') + 300, botCard: () => delay('botCard'),
+  trick: () => delay('trick'), decided: () => delay('decided'),
 };
 function schedule() {
   clearTimeout(timer);
@@ -339,7 +345,7 @@ function renderSheetBase() {
   }
 
   if (R.phase === 'trump') {
-    if (R.bidder !== 0) { el.innerHTML = waitHTML(`${who(R.bidder)} won at ${R.high}`, 'Choosing the thuruppu…'); return; }
+    if (R.bidder !== 0) { el.innerHTML = waitHTML(`Highest bidder: ${who(R.bidder)} · ${bidLabel(R.high)}`, 'Choosing the thuruppu…'); return; }
     if (UI.ntAsk) {   // No trump must be a deliberate choice
       el.innerHTML = `<div class="sheet-head"><div class="sheet-title">Play with no trump?</div>
         <div class="sheet-sub">No suit will be trump this round, and everyone is told straight away.</div></div>
@@ -562,6 +568,12 @@ function scoringSeg() {
   </div>`;
 }
 
+/** Bot speed buttons. `attr` is the data attribute the buttons carry, or null to show them disabled (online guests). */
+function speedSeg(cur, attr) {
+  return `<div class="seg" role="group" aria-label="Bot speed"><span>Bot speed</span>
+    ${Object.keys(SPEEDS).map(v => `<button class="segbtn ${cur === v ? 'on' : ''}" ${attr ? `${attr}="${v}"` : 'disabled'}>${SPEED_LABEL[v]}</button>`).join('')}</div>`;
+}
+
 function versionHTML() {
   return `<div class="ver"><b>Version ${APP_VERSION.name}</b> (build ${APP_VERSION.build}) · ${APP_VERSION.date}<br>${APP_VERSION.note}</div>`;
 }
@@ -573,11 +585,7 @@ function menuHTML() {
       <button class="btn wide" data-act="names">Player names</button>
       <button class="btn wide" data-act="shuffleTeams">Shuffle teams</button>
       <button class="btn wide" data-act="rules">How to play</button>
-      <div class="seg" role="group" aria-label="Bot speed">
-        <span>Bot speed</span>
-        <button class="segbtn ${speed === 'normal' ? 'on' : ''}" data-speed="normal">Normal</button>
-        <button class="segbtn ${speed === 'fast' ? 'on' : ''}" data-speed="fast">Fast</button>
-      </div>
+      ${speedSeg(speed, 'data-speed')}
       ${scoringSeg()}
       <button class="btn wide" data-act="askNew">New match</button>
       <button class="btn primary wide" data-act="back">Back to table</button>
@@ -764,6 +772,7 @@ document.addEventListener('click', e => {
   if (t.dataset.act) { onAction(t.dataset.act); return; }
   if (t.dataset.netscoring) { netSend({ t: 'settings', scoring: t.dataset.netscoring }); return; }
   if (t.dataset.netteams) { netSend({ t: 'settings', teams: t.dataset.netteams }); return; }
+  if (t.dataset.netspeed) { netSend({ t: 'settings', speed: t.dataset.netspeed }); return; }
   if (t.dataset.seat != null && NET.on) { netSend({ t: 'seat', seat: +t.dataset.seat }); return; }
   if (t.dataset.speed) {
     speed = t.dataset.speed;
@@ -1016,6 +1025,7 @@ function lobbyHTML() {
     <p class="muted small">${draw ? 'Teams are drawn with Aces when the game starts.' : 'Teams as seated: seats 1, 3, 5 against 2, 4, 6. Tap an empty seat to move.'}</p>
     ${seg('Scoring', 'scoring', [['twelve', 'First to 12'], ['kitty', 'Kitty &amp; Joker']], m.settings.scoring)}
     ${seg('Teams', 'teams', [['draw', 'Ace draw'], ['seats', 'As seated']], m.settings.teams)}
+    ${speedSeg(m.settings.speed || 'normal', m.isHost ? 'data-netspeed' : null)}
     ${m.isHost
       ? `<button class="btn primary wide" data-act="startTable">Start: ${humans} ${humans === 1 ? 'player' : 'players'}${humans < 6 ? ` + ${6 - humans} ${6 - humans === 1 ? 'bot' : 'bots'}` : ''}</button>`
       : `<p class="center">Waiting for ${host ? esc(host.name) : 'the host'} to start…</p>`}
@@ -1057,6 +1067,8 @@ function onlineMenuHTML() {
       <button class="btn wide" data-act="log">Game log</button>
       <button class="btn wide" data-act="rules">How to play</button>
       <button class="btn wide" data-act="askLeave">Leave table</button>
+      ${NET.msg ? speedSeg(NET.msg.settings.speed || 'normal', NET.msg.isHost ? 'data-netspeed' : null) : ''}
+      ${NET.msg && !NET.msg.isHost ? '<p class="muted small center">Only the host can change the bot speed.</p>' : ''}
       <button class="btn primary wide" data-act="back">Back to table</button>
     </div>${versionHTML()}</div>`;
 }

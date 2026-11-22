@@ -216,7 +216,7 @@ function doBid(p, v) {
   if (R.phase === 'bidding') {
     if (R.high > 0 && (R.passes >= 5 || R.high === 56)) {
       R.phase = 'trump'; R.turn = R.bidder;
-      log(`${pn(R.bidder)} ${pv(R.bidder, 'wins', 'win')} the auction at <b>${R.high}</b>.`);
+      log(`Highest bidder: ${pn(R.bidder)} at <b>${R.high}</b>.`);
       return;
     }
   } else if (R.high === THANI || R.passes >= (R.raised2 ? 5 : 6)) {
@@ -251,7 +251,7 @@ function endSecondRound() {
     R.trump = { suit: null, revealed: false, indicator: null, revealedBy: -1 };
     R.notTrump = [];
     R.phase = 'trump'; R.turn = R.bidder;
-    log(`${pn(R.bidder)} ${pv(R.bidder, 'wins', 'win')} the bid at <b>${R.high}</b> and ${pv(R.bidder, 'picks', 'pick')} a new thuruppu.`);
+    log(`Highest bidder: ${pn(R.bidder)} at <b>${R.high}</b>; new thuruppu.`);
   } else {
     R.phase = 'play'; R.turn = R.leader;
     log(`No raise. ${pn(R.leader)} ${pv(R.leader, 'leads', 'lead')}.`);
