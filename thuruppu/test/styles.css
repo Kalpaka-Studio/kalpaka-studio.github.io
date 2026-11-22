@@ -146,8 +146,8 @@ button { font: inherit; color: inherit; }
 .kit-stack { grid-column: 1 / -1; display: flex; gap: 2px; margin-top: 4px; min-height: 8px; }
 .ms.t1 .kit-stack { justify-content: flex-end; }
 .kit-stack i { width: 5px; height: 8px; border-radius: 1.5px; }
-.ms.t0 .kit-stack i { background: var(--teamA); }
-.ms.t1 .kit-stack i { background: var(--teamB); }
+.kit-stack i.k0 { background: var(--teamA); }
+.kit-stack i.k1 { background: var(--teamB); }
 .jk-tally { font-size: 11px; font-weight: 700; color: var(--muted); }
 .seat .av .joker {
   position: absolute; left: -10px; top: -8px; z-index: 2;

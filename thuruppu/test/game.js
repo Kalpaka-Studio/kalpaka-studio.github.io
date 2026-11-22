@@ -36,7 +36,7 @@ applyTeams();
 // The one version for the web link and the Android/iOS app (shown in the menu).
 // android/app/build.gradle reads `name` and `build` from this line, so keep its shape.
 // Bump `build` on every publish; bump `name` for each release (1.0.2 -> 1.0.3 for fixes, 1.1.0 for features).
-const APP_VERSION = { name: '1.4.0', build: 11, date: '22 Nov 2026', note: 'Test: play with friends online; slow bot speed' };
+const APP_VERSION = { name: '1.4.0', build: 12, date: '22 Nov 2026', note: 'Test: play with friends online; slow bot speed; kitty by colour' };
 // How long each automatic step waits (ms). The online server uses the same multipliers (SPEED_X there).
 const SPEEDS = {
   slow: { bot: 1500, trick: 2500, botCard: 1100, decided: 3400 },
@@ -53,8 +53,8 @@ let timer = null;
 let speed = 'normal';
 try { const s = localStorage.getItem(SPEED_KEY); if (SPEEDS[s]) speed = s; } catch (e) { /* storage blocked */ }
 const SCORING_KEY = 'thuruppu56.scoring';
-let scoring = 'twelve';                     // 'twelve' = first to 12, 'kitty' = Kitty & Joker
-try { if (localStorage.getItem(SCORING_KEY) === 'kitty') scoring = 'kitty'; } catch (e) { /* storage blocked */ }
+let scoring = 'kitty';                      // 'kitty' = Kitty & Joker (default), 'twelve' = first to 12
+try { if (localStorage.getItem(SCORING_KEY) === 'twelve') scoring = 'twelve'; } catch (e) { /* storage blocked */ }
 const delay = k => SPEEDS[speed][k];
 
 // UI-only state
@@ -134,6 +134,17 @@ function fmt(s) {
     .replace(/\{&(\d)\|([^|}]*)\|([^|}]*)\}/g, (_, t, third, you) => +t === team(VIEWER) ? you : third)
     .replace(/\{#(\d)\}/g, (_, t) => TEAM_NAME[+t])
     .replace(/\{\$(\d)\}/g, (_, t) => TEAM_SYM[+t]);
+}
+
+/**
+ * A team's kitty split by colour: [own colour, won from the other team]. Each team starts with 7 of its own
+ * colour, and a team that pays always gives back the other team's colour first. So a team never holds both
+ * fewer than 7 of its own and some of the other's: the split follows from the count alone.
+ */
+function kittyParts(t) { const n = G.kitty[t]; return [Math.min(7, n), Math.max(0, n - 7)]; }
+function kittyText(t) {
+  const [own, won] = kittyParts(t);
+  return `<span class="t${t}c">${TEAM_SYM[t]} ${own}</span>${won ? ` + <span class="t${1 - t}c">${TEAM_SYM[1 - t]} ${won}</span>` : ''}`;
 }
 
 function setScoring(mode) {
@@ -230,7 +241,9 @@ function renderTop() {
   const R = G.R;
   const pct = t => Math.min(100, G.score[t] / TARGET * 100);
   if (isKitty()) {
-    const stack = t => `<i class="kit-stack">${'<i></i>'.repeat(G.kitty[t])}</i>`;
+    // Own-colour cards first, then any won from the other team (in that team's colour).
+    const stack = t => { const [own, won] = kittyParts(t);
+      return `<i class="kit-stack">${`<i class="k${t}"></i>`.repeat(own)}${`<i class="k${1 - t}"></i>`.repeat(won)}</i>`; };
     const held = t => [0, 1, 2, 3, 4, 5].filter(s => team(s) === t).reduce((n, s) => n + G.joker[s], 0);
     const tally = t => held(t) ? `<span class="jk-tally" title="Jokers held now">🃏${held(t)}</span>` : '';
     $('#match').innerHTML = `
@@ -481,10 +494,12 @@ function introHTML() {
       <li><b>J 9 A 10 K Q</b><span>high to low</span></li>
       <li><b>3 · 2 · 1 · 1</b><span>points for J, 9, A, 10</span></li>
       <li><b>Thuruppu</b><span>the bid winner's hidden trump</span></li>
-      <li><b>${TARGET}</b><span>game points wins the match</span></li>
+      ${scoring === 'kitty'
+        ? '<li><b>7 · 7</b><span>kitty cards; run out and your team gets a Joker</span></li>'
+        : `<li><b>${TARGET}</b><span>game points wins the match</span></li>`}
     </ul>
     <div class="col">
-      ${saved ? `<button class="btn primary wide" data-act="resume">Continue · round ${saved.roundNo}, ${saved.score[0]}–${saved.score[1]}</button>
+      ${saved ? `<button class="btn primary wide" data-act="resume">Continue · round ${saved.roundNo}, ${saved.mode === 'kitty' ? `kitty ${saved.kitty[0]}–${saved.kitty[1]}` : `${saved.score[0]}–${saved.score[1]}`}</button>
                  <button class="btn wide" data-act="new">New match</button>`
               : '<button class="btn primary wide" data-act="new">Start match</button>'}
       <button class="btn wide friends-btn" data-act="friends">Play with friends</button>
@@ -622,7 +637,7 @@ function roundHTML() {
       <div><dt>Kitty</dt><dd>${TEAM_NAME[r.kitty.from]} ${r.kitty.from === 0 ? 'pay' : 'pays'} <b>${r.kitty.paid}</b> card${r.kitty.paid === 1 ? '' : 's'}</dd></div>
       ${r.jokerOff && r.jokerOff.length ? `<div><dt>Joker removed</dt><dd>🃏 ${r.jokerOff.map(who).join(', ')}</dd></div>` : ''}
       ${r.jokerTo != null ? `<div><dt>Joker!</dt><dd class="bad">🃏 ${TEAM_NAME[r.jokerTo]} ran out; kitty reset to 7 · 7</dd></div>` : ''}
-      <div><dt>Kitty now</dt><dd><span class="t0c">${TEAM_SYM[0]} ${G.kitty[0]}</span> · <span class="t1c">${TEAM_SYM[1]} ${G.kitty[1]}</span></dd></div>
+      <div><dt>Kitty now</dt><dd>${TEAM_NAME[0]}: ${kittyText(0)}<br>${TEAM_NAME[1]}: ${kittyText(1)}</dd></div>
       <div><dt>Jokers now</dt><dd>${G.joker.some(j => j > 0)
         ? [0, 1, 2, 3, 4, 5].filter(s => G.joker[s] > 0).map(s => `<span class="t${team(s)}c">${esc(NAMES[s])}</span>${G.joker[s] > 1 ? ' ×' + G.joker[s] : ''}`).join(', ')
         : '<span class="muted">none</span>'}</dd></div>`
@@ -658,7 +673,7 @@ function rulesHTML() {
   <h3>Scoring</h3>
   <p>If the bidding team takes at least its bid it scores 1 (28–39), 2 (40–47), 3 (48–55) or 4 (56). If it falls short, the other team scores 2 (28–39), 3 (40–47), 4 (48–55) or 5 (56). Thani scores the same as 56. A COT scores 2 if made and 3 to the other team if not.</p>
   <p><b>First to 12</b> (Scoring setting): game points add up and the first team to ${TARGET} wins the match.</p>
-  <p><b>Kitty &amp; Joker</b>: each team starts with a kitty of 7 cards. After each round the losing team pays the winners as many kitty cards as the game points. A team that runs out gets a <b>Joker</b> on every member (Jokers add up) and the kitty is shared out 7 and 7 again. To remove Jokers, the team must win the bidding and make the bid (any bid, Thani or a made COT): in the very first round after its latest Joker, every member removes one; after that, only the player who made the winning bid removes one of their own.</p>
+  <p><b>Kitty &amp; Joker</b>: each team starts with a kitty of 7 cards. After each round the losing team pays the winners as many kitty cards as the game points. A team that runs out gets a <b>Joker</b> on every member (Jokers add up) and the kitty is shared out 7 and 7 again. Kitty cards are in team colours: a team that pays gives back the other team's cards first, so a kitty of 10 shows as 7 of its own colour plus 3 won. To remove Jokers, the team must win the bidding and make the bid (any bid, Thani or a made COT): in the very first round after its latest Joker, every member removes one; after that, only the player who made the winning bid removes one of their own.</p>
   <p><b>Career score</b> (in the menu and the round summary): every round's game points keep adding up in the background, whichever scoring you play. A new Ace draw starts it again.</p>
   <div class="row end"><button class="btn primary" data-act="back">Got it</button></div></div>`;
 }
