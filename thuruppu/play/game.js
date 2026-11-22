@@ -36,7 +36,7 @@ applyTeams();
 // The one version for the web link and the Android/iOS app (shown in the menu).
 // android/app/build.gradle reads `name` and `build` from this line, so keep its shape.
 // Bump `build` on every publish; bump `name` for each release (1.0.2 -> 1.0.3 for fixes, 1.1.0 for features).
-const APP_VERSION = { name: '1.4.0', build: 15, date: '22 Nov 2026', note: 'Play with friends online; slow bot speed; Kitty & Joker by default' };
+const APP_VERSION = { name: '1.4.0', build: 16, date: '22 Nov 2026', note: 'Play with friends online; slow bot speed; Kitty & Joker by default' };
 // How long each automatic step waits (ms). The online server uses the same multipliers (SPEED_X there).
 const SPEEDS = {
   slow: { bot: 1500, trick: 2500, botCard: 1100, decided: 3400 },
