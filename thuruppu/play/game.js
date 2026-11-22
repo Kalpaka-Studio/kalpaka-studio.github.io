@@ -36,7 +36,7 @@ applyTeams();
 // The one version for the web link and the Android/iOS app (shown in the menu).
 // android/app/build.gradle reads `name` and `build` from this line, so keep its shape.
 // Bump `build` on every publish; bump `name` for each release (1.0.2 -> 1.0.3 for fixes, 1.1.0 for features).
-const APP_VERSION = { name: '1.4.0', build: 14, date: '22 Nov 2026', note: 'Play with friends online; slow bot speed; Kitty & Joker by default' };
+const APP_VERSION = { name: '1.4.0', build: 15, date: '22 Nov 2026', note: 'Play with friends online; slow bot speed; Kitty & Joker by default' };
 // How long each automatic step waits (ms). The online server uses the same multipliers (SPEED_X there).
 const SPEEDS = {
   slow: { bot: 1500, trick: 2500, botCard: 1100, decided: 3400 },
@@ -244,8 +244,10 @@ function renderTop() {
     // Own-colour cards first, then any won from the other team (in that team's colour).
     const stack = t => { const [own, won] = kittyParts(t);
       return `<i class="kit-stack">${`<i class="k${t}"></i>`.repeat(own)}${`<i class="k${1 - t}"></i>`.repeat(won)}</i>`; };
-    const held = t => [0, 1, 2, 3, 4, 5].filter(s => team(s) === t).reduce((n, s) => n + G.joker[s], 0);
-    const tally = t => held(t) ? `<span class="jk-tally" title="Jokers held now">🃏${held(t)}</span>` : '';
+    // The team's Jokers right now: each one the team got and hasn't fully removed (the most any member holds),
+    // not one per member.
+    const held = t => Math.max(...[0, 1, 2, 3, 4, 5].filter(s => team(s) === t).map(s => G.joker[s]));
+    const tally = t => held(t) ? `<span class="jk-tally" title="Team Jokers now">🃏${held(t) > 1 ? held(t) : ''}</span>` : '';
     $('#match').innerHTML = `
       <div class="ms kit t0"><span class="ms-label" title="${TEAM_NAME[0]} (your team)">${TEAM_SYM[0]}</span><b>${G.kitty[0]}</b>${tally(0)}${stack(0)}</div>
       <span class="ms-to">kitty</span>
@@ -495,7 +497,7 @@ function introHTML() {
       <li><b>3 · 2 · 1 · 1</b><span>points for J, 9, A, 10</span></li>
       <li><b>Thuruppu</b><span>the bid winner's hidden trump</span></li>
       ${scoring === 'kitty'
-        ? '<li><b>7 · 7</b><span>kitty cards; run out and your team gets a Joker</span></li>'
+        ? '<li><b>7 · 7</b><span>kitty cards; can&rsquo;t pay and your team gets a Joker</span></li>'
         : `<li><b>${TARGET}</b><span>game points wins the match</span></li>`}
     </ul>
     <div class="col">
@@ -636,7 +638,7 @@ function roundHTML() {
       ${r.kitty ? `
       <div><dt>Kitty</dt><dd>${TEAM_NAME[r.kitty.from]} ${r.kitty.from === 0 ? 'pay' : 'pays'} <b>${r.kitty.paid}</b> card${r.kitty.paid === 1 ? '' : 's'}</dd></div>
       ${r.jokerOff && r.jokerOff.length ? `<div><dt>Joker removed</dt><dd>🃏 ${r.jokerOff.map(who).join(', ')}</dd></div>` : ''}
-      ${r.jokerTo != null ? `<div><dt>Joker!</dt><dd class="bad">🃏 ${TEAM_NAME[r.jokerTo]} ran out; kitty reset to 7 · 7</dd></div>` : ''}
+      ${r.jokerTo != null ? `<div><dt>Joker!</dt><dd class="bad">🃏 ${TEAM_NAME[r.jokerTo]} couldn't pay; kitty reset to 7 · 7</dd></div>` : ''}
       <div><dt>Kitty now</dt><dd>${TEAM_NAME[0]}: ${kittyText(0)}<br>${TEAM_NAME[1]}: ${kittyText(1)}</dd></div>
       <div><dt>Jokers now</dt><dd>${G.joker.some(j => j > 0)
         ? [0, 1, 2, 3, 4, 5].filter(s => G.joker[s] > 0).map(s => `<span class="t${team(s)}c">${esc(NAMES[s])}</span>${G.joker[s] > 1 ? ' ×' + G.joker[s] : ''}`).join(', ')
@@ -673,7 +675,7 @@ function rulesHTML() {
   <h3>Scoring</h3>
   <p>If the bidding team takes at least its bid it scores 1 (28–39), 2 (40–47), 3 (48–55) or 4 (56). If it falls short, the other team scores 2 (28–39), 3 (40–47), 4 (48–55) or 5 (56). Thani scores the same as 56. A COT scores 2 if made and 3 to the other team if not.</p>
   <p><b>First to 12</b> (Scoring setting): game points add up and the first team to ${TARGET} wins the match.</p>
-  <p><b>Kitty &amp; Joker</b>: each team starts with a kitty of 7 cards. After each round the losing team pays the winners as many kitty cards as the game points. A team that runs out gets a <b>Joker</b> on every member (Jokers add up) and the kitty is shared out 7 and 7 again. Kitty cards are in team colours: a team that pays gives back the other team's cards first, so a kitty of 10 shows as 7 of its own colour plus 3 won. To remove Jokers, the team must win the bidding and make the bid (any bid, Thani or a made COT): in the very first round after its latest Joker, every member removes one; after that, only the player who made the winning bid removes one of their own.</p>
+  <p><b>Kitty &amp; Joker</b>: each team starts with a kitty of 7 cards. After each round the losing team pays the winners as many kitty cards as the game points. A team can play on with an empty kitty (14 · 0) and win cards back. Only when a team loses a round and <b>can't pay in full</b> (it owes more cards than it has) does it get a <b>Joker</b> on every member (Jokers add up), and the kitty is shared out 7 and 7 again. The Joker count in the top bar is the team's Jokers right now; each player's own Jokers show on their seat. Kitty cards are in team colours: a team that pays gives back the other team's cards first, so a kitty of 10 shows as 7 of its own colour plus 3 won. To remove Jokers, the team must win the bidding and make the bid (any bid, Thani or a made COT): in the very first round after its latest Joker, every member removes one; after that, only the player who made the winning bid removes one of their own.</p>
   <p><b>Career score</b> (in the menu and the round summary): every round's game points keep adding up in the background, whichever scoring you play. A new Ace draw starts it again.</p>
   <h3 id="friendsHelp">Playing with friends</h3>
   <p>Up to 6 people can play at one table, each on their own phone or computer. Empty seats are played by bots, so 2 to 6 people works. You need an internet connection; playing against the bots works offline as before.</p>
