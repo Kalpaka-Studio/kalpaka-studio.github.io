@@ -36,7 +36,7 @@ applyTeams();
 // The one version for the web link and the Android/iOS app (shown in the menu).
 // android/app/build.gradle reads `name` and `build` from this line, so keep its shape.
 // Bump `build` on every publish; bump `name` for each release (1.0.2 -> 1.0.3 for fixes, 1.1.0 for features).
-const APP_VERSION = { name: '1.4.0', build: 12, date: '22 Nov 2026', note: 'Test: play with friends online; slow bot speed; kitty by colour' };
+const APP_VERSION = { name: '1.4.0', build: 13, date: '22 Nov 2026', note: 'Play with friends online; slow bot speed; Kitty & Joker by default' };
 // How long each automatic step waits (ms). The online server uses the same multipliers (SPEED_X there).
 const SPEEDS = {
   slow: { bot: 1500, trick: 2500, botCard: 1100, decided: 3400 },
@@ -829,7 +829,10 @@ document.addEventListener('keydown', e => {
 //  The server sends each player their own view, turned so they sit at seat 0, so the
 //  table above draws it unchanged; our moves go to the server instead of the engine.
 // =========================================================================
-const SERVER_DEFAULT = 'https://thuruppu-test.kalpakastudiohq.workers.dev';
+// The live server for the app and the public page; the test page (…/thuruppu/test/) uses the test server.
+const SERVER_DEFAULT = /\/thuruppu\/test\//.test(location.pathname)
+  ? 'https://thuruppu-test.kalpakastudiohq.workers.dev'
+  : 'https://thuruppu.kalpakastudiohq.workers.dev';
 const SHARE_PAGE = 'https://kalpaka-studio.github.io/thuruppu/play/';
 const ONLINE_KEY = 'thuruppu56.online';      // { code } of the table we're at, to rejoin after a reload
 const PID_KEY = 'thuruppu56.pid';            // a random id for this phone: how the table knows us again
