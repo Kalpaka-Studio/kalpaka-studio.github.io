@@ -146,8 +146,8 @@ button { font: inherit; color: inherit; }
 .kit-stack { grid-column: 1 / -1; display: flex; gap: 2px; margin-top: 4px; min-height: 8px; }
 .ms.t1 .kit-stack { justify-content: flex-end; }
 .kit-stack i { width: 5px; height: 8px; border-radius: 1.5px; }
-.ms.t0 .kit-stack i { background: var(--teamA); }
-.ms.t1 .kit-stack i { background: var(--teamB); }
+.kit-stack i.k0 { background: var(--teamA); }
+.kit-stack i.k1 { background: var(--teamB); }
 .jk-tally { font-size: 11px; font-weight: 700; color: var(--muted); }
 .seat .av .joker {
   position: absolute; left: -10px; top: -8px; z-index: 2;
@@ -237,12 +237,12 @@ button { font: inherit; color: inherit; }
 
 .flash {
   position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) scale(.85); z-index: 40;
-  background: var(--bg); border: 2px solid var(--brass); border-radius: 18px; padding: 10px 28px; text-align: center;
+  background: var(--bg); border: 2px solid var(--brass); border-radius: 14px; padding: 5px 16px 6px; text-align: center;
   opacity: 0; pointer-events: none; transition: opacity .25s, transform .25s; box-shadow: 0 12px 40px var(--shadow);
 }
 .flash.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-.fl-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .14em; color: var(--brass); }
-.fl-big { font: 800 52px/1.1 var(--display); color: var(--text); }
+.fl-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .12em; color: var(--brass); }
+.fl-big { font: 800 32px/1.05 var(--display); color: var(--text); white-space: nowrap; }
 .fl-big.red { color: #ff6370; }
 
 /* ---------- Cards ---------- */
@@ -425,3 +425,45 @@ button { font: inherit; color: inherit; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- Online play: join screen, lobby, turn clock ---------- */
+.friends .field { display: flex; flex-direction: column; gap: 6px; font-weight: 600; color: var(--muted); margin: 12px 0; }
+.friends input, .code-in {
+  height: 44px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface-2);
+  color: var(--text); font: 600 16px var(--body); padding: 0 12px; min-width: 0;
+}
+.friends input:focus { outline: 2px solid var(--brass); outline-offset: 0; border-color: transparent; }
+.code-in { flex: 1; text-transform: uppercase; letter-spacing: .25em; font-family: var(--display); font-weight: 800; text-align: center; }
+.row.join { margin-top: 4px; }
+.or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; margin: 16px 0 8px; }
+.or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.err { color: var(--red-team); font-weight: 600; margin: 10px 0 0; }
+.center { text-align: center; }
+.small { font-size: 12.5px; }
+.friends-btn { border-color: var(--brass); }
+.lobby-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.lobby-head .col { gap: 6px; }
+.tcode { font: 800 36px/1.1 var(--display); letter-spacing: .12em; color: var(--brass); }
+.lobby-seats { display: grid; gap: 6px; margin: 10px 0; }
+.lseat {
+  display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 0 12px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--text); font: 600 15px var(--body); text-align: left; cursor: pointer;
+}
+.lseat:disabled { cursor: default; opacity: 1; }
+.lseat.bot { border-style: dashed; }
+.lseat.me { border-color: var(--brass); }
+.lseat.t0 .ls-n { background: var(--teamA); color: var(--bg); }
+.lseat.t1 .ls-n { background: var(--teamB); color: var(--bg); }
+.ls-n { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 800; background: var(--surface-2); color: var(--muted); flex: none; }
+.ls-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lt { font-style: normal; font-size: 11px; font-weight: 800; padding: 2px 6px; border-radius: 6px; background: var(--surface-2); color: var(--muted); }
+.lt.you { background: var(--brass); color: var(--brass-ink); }
+.lt.offline { color: var(--red-team); }
+.lobby .seg { margin-top: 8px; }
+.lobby .btn.primary.wide { margin-top: 12px; }
+.tmr { margin-top: 4px; font-size: 12.5px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tmr.low { color: var(--red-team); }
+.netwarn { display: inline-block; margin-bottom: 4px; font-size: 12px; font-weight: 800; color: var(--brass-ink); background: var(--brass); border-radius: 6px; padding: 1px 7px; }
+.tag.bot { background: var(--surface-2); color: var(--muted); }
+.tag.off { background: rgba(255, 106, 90, .18); color: var(--red-team); }
+.seat.dropped .av { opacity: .55; }

@@ -1,19 +1,11 @@
 'use strict';
 /* =========================================================================
-   Thuruppu 56 — six-player trick-taking card game (hidden-trump variant)
-   Seats are numbered 0..5 counter-clockwise; the human is seat 0.
+   Thuruppu 56 — the screen: table, hand, menus, and playing the bots' turns on this phone.
+   The rules, scoring and bots live in engine.js (loaded first); this file shows them and turns taps
+   into engine actions. Seats are numbered 0..5 counter-clockwise; the human is seat 0.
    Your team = seats 0, 2, 4 · other team = 1, 3, 5. Which is Black and which Red comes from the Ace draw.
    ========================================================================= */
 
-// ---------- Constants ----------
-const SUITS = ['S', 'H', 'C', 'D'];
-const SUIT_SYM = { S: '♠', H: '♥', D: '♦', C: '♣', NT: 'NT' };
-const SUIT_NAME = { S: 'Spades', H: 'Hearts', D: 'Diamonds', C: 'Clubs', NT: 'No Trump' };
-const RANKS = ['J', '9', 'A', '10', 'K', 'Q'];            // high → low
-const POWER = { J: 6, '9': 5, A: 4, '10': 3, K: 2, Q: 1 };
-const POINTS = { J: 3, '9': 2, A: 1, '10': 1, K: 0, Q: 0 };
-const BID_VALUES = [28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 42, 44, 46, 48, 52, 56];
-const THANI = 57;   // the special "win every trick alone" call, ranked above 56
 // Seat 0 is you; seats 2 and 4 are your partners; 1, 3, 5 are opponents. Names are editable and kept per device.
 const DEFAULT_NAMES = ['You', 'Geetha', 'Anjana', 'Deepu', 'Bindu', 'Meenakshi'];
 const NAMES_KEY = 'thuruppu56.names';
@@ -41,94 +33,39 @@ function applyTeams() {
   try { document.documentElement.classList.toggle('black-is-1', b === 1); } catch (e) { /* no DOM */ }
 }
 applyTeams();
-const TARGET = 12;
 // The one version for the web link and the Android/iOS app (shown in the menu).
 // android/app/build.gradle reads `name` and `build` from this line, so keep its shape.
 // Bump `build` on every publish; bump `name` for each release (1.0.2 -> 1.0.3 for fixes, 1.1.0 for features).
-const APP_VERSION = { name: '1.3.1', build: 8, date: '21 Nov 2026', note: 'Career score; your Joker shows in your name' };
-const SPEEDS = { normal: { bot: 850, trick: 1500 }, fast: { bot: 420, trick: 900 } };
+const APP_VERSION = { name: '1.4.0', build: 13, date: '22 Nov 2026', note: 'Play with friends online; slow bot speed; Kitty & Joker by default' };
+// How long each automatic step waits (ms). The online server uses the same multipliers (SPEED_X there).
+const SPEEDS = {
+  slow: { bot: 1500, trick: 2500, botCard: 1100, decided: 3400 },
+  normal: { bot: 850, trick: 1500, botCard: 700, decided: 2400 },
+  fast: { bot: 420, trick: 900, botCard: 700, decided: 2400 },
+};
+const SPEED_LABEL = { slow: 'Slow', normal: 'Normal', fast: 'Fast' };
 const SAVE_KEY = 'thuruppu56.save.v1';
 const SPEED_KEY = 'thuruppu56.speed';
 
-const team = p => p % 2;
-const nextSeat = p => (p + 1) % 6;
-const isRed = s => s === 'H' || s === 'D';
-
-// The 48-card deck: two identical 24-card sets.
-const CARDS = [];
-for (let copy = 0; copy < 2; copy++)
-  for (const s of SUITS)
-    for (const r of RANKS) CARDS.push({ id: CARDS.length, suit: s, rank: r });
-
-function shuffle(a) {
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-function sortHand(h) {
-  h.sort((a, b) => SUITS.indexOf(a.suit) - SUITS.indexOf(b.suit) || POWER[b.rank] - POWER[a.rank]);
-}
 
 // ---------- State ----------
-let G = null;            // match state (serialisable)
 let timer = null;
 let speed = 'normal';
-try { if (localStorage.getItem(SPEED_KEY) === 'fast') speed = 'fast'; } catch (e) { /* storage blocked */ }
+try { const s = localStorage.getItem(SPEED_KEY); if (SPEEDS[s]) speed = s; } catch (e) { /* storage blocked */ }
 const SCORING_KEY = 'thuruppu56.scoring';
-let scoring = 'twelve';                     // 'twelve' = first to 12, 'kitty' = Kitty & Joker
-try { if (localStorage.getItem(SCORING_KEY) === 'kitty') scoring = 'kitty'; } catch (e) { /* storage blocked */ }
+let scoring = 'kitty';                      // 'kitty' = Kitty & Joker (default), 'twelve' = first to 12
+try { if (localStorage.getItem(SCORING_KEY) === 'twelve') scoring = 'twelve'; } catch (e) { /* storage blocked */ }
 const delay = k => SPEEDS[speed][k];
 
 // UI-only state
 const UI = { overlay: 'intro', sel: null, bidPick: null, shake: null };
 
-function newMatch(dealer) {
-  clearTimeout(timer);
-  const d = Number.isInteger(dealer) ? dealer : Math.floor(Math.random() * 6);
-  G = { score: [0, 0], dealer: d, roundNo: 0, log: [], R: null, mode: scoring };
-  if (scoring === 'kitty') {
-    G.kitty = [7, 7];                       // index = team (0 = your team)
-    G.joker = Array(6).fill(0);             // Jokers held by each seat
-    G.jokerFresh = [false, false];          // team got its latest Joker last round
-  }
-  UI.overlay = null;
-  startRound();
-}
-
-// ---------- The Ace draw: who plays with whom ----------
-// Cards are dealt face-up one at a time round the table. Anyone who gets an Ace (any suit) joins the
-// Black team and is skipped from then on; once three players hold Aces, the other three are Red.
-// You stay at the bottom; your two team-mates take the alternate seats. The first Ace receiver deals first.
-function makeDraw() {
-  const drawDealer = Math.floor(Math.random() * 6);
-  const deck = shuffle(CARDS.slice());
-  const seq = [], aces = [];
-  let seat = drawDealer;
-  while (aces.length < 3) {
-    seat = nextSeat(seat);
-    if (aces.includes(seat)) continue;
-    const card = deck.pop();
-    seq.push({ seat, card });
-    if (card.rank === 'A') aces.push(seat);
-  }
-  const youBlack = aces.includes(0);
-  const mates = (youBlack ? aces : [0, 1, 2, 3, 4, 5].filter(s => !aces.includes(s))).filter(s => s !== 0).sort((a, b) => a - b);
-  const others = [0, 1, 2, 3, 4, 5].filter(s => s !== 0 && !mates.includes(s));
-  const order = [0, others[0], mates[0], others[1], mates[1], others[2]];   // old seat → new seat index
-  return {
-    drawDealer, seq, aces, step: 0,
-    names: order.map(s => NAMES[s]),
-    black: youBlack ? 0 : 1,
-    firstDealer: order.indexOf(aces[0]),
-  };
-}
 
 let drawTimer = null;
 function startDraw() {
   clearTimeout(timer); clearInterval(drawTimer);
-  UI.draw = makeDraw();
+  const d = makeDraw();
+  UI.draw = Object.assign(d, { step: 0, names: d.order.map(s => NAMES[s]) });
   openOverlay('draw');
   drawTimer = setInterval(() => {
     const d = UI.draw;
@@ -149,477 +86,71 @@ function finishDraw() {
   resetCareer();                 // new teams: the career score starts again
   UI.draw = null;
   overlayReturn = null;
-  newMatch(d.firstDealer);
-  log(`Teams drawn by Aces: ${TEAM_SYM[TEAMS.black]} ${TEAM_NAME[TEAMS.black]} vs ${TEAM_SYM[1 - TEAMS.black]} ${TEAM_NAME[1 - TEAMS.black]}. ${who(G.dealer)} drew the first Ace and ${vb(G.dealer, 'deals', 'deal')}.`);
+  startMatch(d.firstDealer);
+  const b = TEAMS.black;
+  log(`Teams drawn by Aces: ${tsy(b)} ${tn(b)} vs ${tsy(1 - b)} ${tn(1 - b)}. ${pn(G.dealer)} drew the first Ace and ${pv(G.dealer, 'deals', 'deal')}.`);
   render();
 }
 
-function startRound() {
-  G.roundNo++;
-  const R = {
-    deck: null, pile: [],
-    hands: [[], [], [], [], [], []],
-    phase: 'bidding',
-    high: 0, bidder: -1, passes: 0,
-    lastBid: Array(6).fill(null),
-    turn: nextSeat(G.dealer),
-    trump: { suit: null, revealed: false, indicator: null, revealedBy: -1 },
-    plays: [], leader: nextSeat(G.dealer), trickNo: 0,
-    captured: [0, 0], tricksWon: Array(6).fill(0),
-    mustPlayTrump: false, played: new Set(), busy: false, result: null, lastTrick: null,
-    voids: [[], [], [], [], [], []],   // suits each player has shown they are out of
-    notTrump: [],   // suits the whole table can rule out as thuruppu (seen the bidder lead or discard them)
-  };
-  G.R = R;
-  const prepared = prepareDeck();
-  R.deck = prepared.deck; R.shuffle = prepared.kind;
-  UI.sel = null; UI.bidPick = null; UI.ntAsk = false;
-  dealCards(4);
-  const how = R.shuffle === 'full' ? vb(G.dealer, 'shuffles well', 'shuffle well')
-    : R.shuffle === 'medium' ? vb(G.dealer, 'shuffles', 'shuffle') : vb(G.dealer, 'shuffles lightly', 'shuffle lightly');
-  log(`<b>Round ${G.roundNo}</b> · ${who(G.dealer)} ${how} and ${vb(G.dealer, 'deals', 'deal')}.`);
-  render();
-  schedule();
-}
-
-// ---------- Shuffling & dealing, the way a real table does it ----------
-// Played cards are gathered trick by trick, so each trick's suit stays clumped together.
-// The dealer usually gives the pack only a light shuffle (a riffle or two and a cut), so some
-// clumps survive and some players get long, strong suits. Now and then it is shuffled thoroughly.
-/** A casual hand riffle: the two halves fall together a few cards at a time, not perfectly alternating. */
-function riffle(deck) {
-  let cut = 0;
-  for (let i = 0; i < deck.length; i++) if (Math.random() < 0.5) cut++;   // split near the middle
-  const a = deck.slice(0, cut), b = deck.slice(cut), out = [];
-  while (a.length || b.length) {
-    const src = Math.random() * (a.length + b.length) < a.length ? a : b;
-    const r = Math.random(), k = r < 0.4 ? 1 : r < 0.75 ? 2 : 3;          // clumps of 1–3 cards
-    out.push(...src.splice(0, k));
-  }
-  return out;
-}
-/** An overhand shuffle: small blocks pulled off the top, so blocks stay together but change order. */
-function overhand(deck) {
-  const src = deck.slice(), out = [];
-  while (src.length) out.unshift(...src.splice(0, 3 + Math.floor(Math.random() * 6)));
-  return out;
-}
-function cutDeck(deck) {
-  const k = 8 + Math.floor(Math.random() * (deck.length - 16));
-  return deck.slice(k).concat(deck.slice(0, k));
-}
-function prepareDeck() {
-  const pile = G.pile && G.pile.length === 48 ? G.pile.map(id => CARDS[id]) : null;
-  if (!pile) return { deck: shuffle(CARDS.slice()), kind: 'full' };    // new pack: first deal of a match
-  const r = Math.random();                                             // mostly light, in no fixed pattern
-  let d = pile, kind;
-  if (r < 0.30) { d = overhand(d); kind = 'light'; }
-  else if (r < 0.60) { d = riffle(d); kind = 'light'; }
-  else if (r < 0.85) { d = riffle(overhand(riffle(d))); kind = 'medium'; }
-  else return { deck: shuffle(pile), kind: 'full' };
-  return { deck: cutDeck(d), kind };
-}
-
-/** Deal n cards to each player as one packet, starting right of the dealer. */
-function dealCards(n) {
-  const R = G.R;
-  for (let i = 0; i < 6; i++) {
-    const p = (G.dealer + 1 + i) % 6;
-    for (let k = 0; k < n; k++) R.hands[p].push(R.deck.pop());
-  }
-  R.hands.forEach(sortHand);
-}
-
-function log(msg) {
-  G.log.unshift(msg);
-  if (G.log.length > 120) G.log.pop();
-}
-const vb = (p, third, you) => (p === 0 && NAMES[0] === 'You') ? you : third;
-const who = p => `<span class="lname t${team(p)}">${esc(NAMES[p])}</span>`;
-const symHTML = s => s === 'NT' ? 'NT' : `<span class="sym ${isRed(s) ? 'red' : ''}">${SUIT_SYM[s]}</span>`;
-const suitHTML = s => s === 'NT' ? '<b>No Trump</b>' : `${symHTML(s)} ${SUIT_NAME[s]}`;
-const cardName = c => `${c.rank}${SUIT_SYM[c.suit]}`;
-
-// ---------- Scheduling bot turns ----------
+// ---------- Running the engine on this phone ----------
+// Seat 0 is played by you; the engine's nextStep() says when a bot moves or a trick is collected,
+// and we wait a little before each so the table is easy to follow.
+Engine.emit = (type, d) => {
+  if (type === 'round') { UI.sel = null; UI.bidPick = null; UI.ntAsk = false; }
+  else if (type === 'flash') { if (d.suit) flash(d.suit); else flashText(fmt(d.label), fmt(d.big)); }
+  else if (type === 'decided') UI.overlay = 'decided';
+  else if (type === 'roundEnd') { addCareer(d); UI.overlay = 'round'; }
+};
+const STEP_DELAY = {
+  bot: () => delay('bot'), botTrump: () => delay('bot') + 300, botCard: () => delay('botCard'),
+  trick: () => delay('trick'), decided: () => delay('decided'),
+};
 function schedule() {
   clearTimeout(timer);
-  const R = G && G.R;
-  if (!R || R.busy) return;
-  if (isBidding(R) && R.turn !== 0)
-    timer = setTimeout(() => { if (G.R === R) doBid(R.turn, aiBid(R.turn)); }, delay('bot'));
-  else if (R.phase === 'trump' && R.bidder !== 0)
-    timer = setTimeout(() => { if (G.R === R) setTrump(R.bidder, aiTrump(R.bidder)); }, delay('bot') + 300);
-  else if (R.phase === 'play' && R.turn !== 0)
-    timer = setTimeout(() => { if (G.R === R) botPlay(R.turn); }, delay('bot'));
-}
-
-// ---------- Bidding ----------
-/** Bids seat p may make. Nobody may raise over their own team's standing bid. */
-function legalBids(p) {
+  if (NET.on) return;                                  // online, the server moves the bots
+  const st = G && nextStep();
+  if (!st) return;
   const R = G.R;
-  let min = R.phase === 'bidding2' ? 40 : 28;     // second round (8 cards) is for 40 and above
-  if (R.bidder >= 0 && team(R.bidder) === team(p)) min = 40;  // own team may only push it to 40+
-  const bids = BID_VALUES.filter(v => v > R.high && v >= min);
-  if (R.phase === 'bidding2' && R.high < THANI) bids.push(THANI);  // Thani: second round only, above anything
-  return bids;
+  timer = setTimeout(() => { if (G.R !== R) return; st.run(); update(); }, STEP_DELAY[st.kind]());
 }
-const isBidding = R => R.phase === 'bidding' || R.phase === 'bidding2';
-const bidLabel = v => v === THANI ? 'Thani' : String(v);
-
-function doBid(p, v) {
-  const R = G.R;
-  if (!isBidding(R) || R.turn !== p) return;
-  if (v != null) {
-    if (!legalBids(p).includes(v)) return;
-    R.high = v; R.bidder = p; R.passes = 0; R.lastBid[p] = v;
-    if (R.phase === 'bidding2') R.raised2 = true;
-    log(v === THANI ? `${who(p)} ${vb(p, 'calls', 'call')} <b>Thani</b>!` : `${who(p)} ${vb(p, 'bids', 'bid')} <b>${v}</b>.`);
-  } else {
-    if (R.high === 0) return;           // the player next to the dealer must open — no pass
-    R.passes++; R.lastBid[p] = 'Pass';
-    log(`${who(p)} ${vb(p, 'passes', 'pass')}.`);
-  }
-
-  if (R.phase === 'bidding') {
-    if (R.high > 0 && (R.passes >= 5 || R.high === 56)) {
-      R.phase = 'trump'; R.turn = R.bidder;
-      log(`${who(R.bidder)} ${vb(R.bidder, 'wins', 'win')} the auction at <b>${R.high}</b>.`);
-      render(); schedule();
-      return;
-    }
-  } else if (R.high === THANI || R.passes >= (R.raised2 ? 5 : 6)) {
-    endSecondRound();
-    return;
-  }
-  R.turn = nextSeat(p);
-  render(); schedule();
+/** After any move: redraw and line up whatever happens next. */
+function update() { render(); schedule(); }
+function startMatch(dealer) {
+  clearTimeout(timer);
+  UI.overlay = null;
+  newMatch({ dealer, mode: scoring });
+  update();
 }
 
-/** After all 8 cards are dealt, everyone gets one more chance to raise to 40 or above. */
-function startSecondRound() {
-  const R = G.R;
-  R.phase = 'bidding2'; R.turn = nextSeat(G.dealer); R.passes = 0; R.raised2 = false;
-  R.lastBid = Array(6).fill(null);
-  log(R.high >= 56
-    ? 'Second round: call <b>Thani</b> or pass.'
-    : `Second round: raise to <b>${Math.max(40, legalBids(1 - team(R.bidder))[0] || 40)}</b> or more, call Thani, or pass.`);
-}
-
-function endSecondRound() {
-  const R = G.R;
-  R.round2Done = true;
-  if (R.high === THANI) {
-    // Thani: no thuruppu at all, the bidder's partners sit out, and the bidder leads every trick.
-    R.thani = true;
-    R.trump = { suit: 'NT', revealed: true, indicator: null, revealedBy: -1 };
-    R.notTrump = [];
-    R.leader = R.bidder; R.phase = 'play'; R.turn = R.bidder;
-    log(`<b>Thani!</b> ${who(R.bidder)} must win all 8 tricks alone. No thuruppu; partners sit out.`);
-  } else if (R.raised2) {
-    // The new highest bidder chooses the thuruppu afresh; the old face-down card simply goes back into play.
-    R.trump = { suit: null, revealed: false, indicator: null, revealedBy: -1 };
-    R.notTrump = [];
-    R.phase = 'trump'; R.turn = R.bidder;
-    log(`${who(R.bidder)} ${vb(R.bidder, 'wins', 'win')} the bid at <b>${R.high}</b> and ${vb(R.bidder, 'picks', 'pick')} a new thuruppu.`);
-  } else {
-    R.phase = 'play'; R.turn = R.leader;
-    log(`No raise. ${who(R.leader)} ${vb(R.leader, 'leads', 'lead')}.`);
-  }
-  render(); schedule();
-}
-
-// ---------- Trump selection ----------
-function setTrump(p, choice) {
-  const R = G.R;
-  if (R.phase !== 'trump' || p !== R.bidder) return;
-  if (choice === 'NT') {
-    // No trump is announced to everyone at once; with nothing hidden, nobody can ask for a thuruppu.
-    R.trump = { suit: 'NT', revealed: true, indicator: null, revealedBy: p };
-    log(`${who(p)} ${vb(p, 'chooses', 'choose')} <b>no trump</b> for this round.`);
-    flashText('This round', 'No trump');
-  } else {
-    const c = R.hands[p].find(c => c.id === choice);
-    if (!c) return;
-    R.trump.suit = c.suit; R.trump.indicator = c.id;
-    log(`${who(p)} secretly ${vb(p, 'sets', 'set')} the thuruppu.`);
-  }
-  if (R.round2Done) {
-    R.phase = 'play'; R.turn = R.leader;
-    log(`${who(R.leader)} ${vb(R.leader, 'leads', 'lead')}.`);
-  } else {
-    dealCards(4);
-    log('Four more cards each.');
-    startSecondRound();                  // always: even over 56, someone may call Thani
-  }
-  render(); schedule();
-}
-
-// ---------- Play rules ----------
-function isLocked(p, c) {
-  const R = G.R;
-  return !R.trump.revealed && p === R.bidder && c.id === R.trump.indicator && R.hands[p].length > 1;
-}
-
-/** Legal cards for seat p right now, and whether p may ask to reveal trump. */
-function legal(p) {
-  const R = G.R;
-  const hand = R.hands[p];
-  const eff = hand.filter(c => !isLocked(p, c));
-  const ts = R.trump.suit;
-  const hiddenBidder = !R.trump.revealed && p === R.bidder && ts && ts !== 'NT';
-  if (R.plays.length === 0) {
-    // The bidder may not lead a thuruppu while it is hidden (unless nothing else is left; leading it then reveals it).
-    if (hiddenBidder) {
-      const non = eff.filter(c => c.suit !== ts);
-      if (non.length) return { cards: non, canReveal: false, isVoid: false };
-    }
-    return { cards: eff, canReveal: false, isVoid: false };
-  }
-
-  const led = R.plays[0].card.suit;
-  const follow = eff.filter(c => c.suit === led);
-  if (follow.length) return { cards: follow, canReveal: false, isVoid: false };
-
-  if (R.trump.revealed) {
-    if (R.mustPlayTrump) {
-      // A bidder who lifts their own face-down card cuts with that very card.
-      const lifted = R.trump.revealedBy === p && p === R.bidder && hand.find(c => c.id === R.trump.indicator);
-      if (lifted) return { cards: [lifted], canReveal: false, isVoid: true };
-      const tr = ts !== 'NT' ? hand.filter(c => c.suit === ts) : [];
-      return { cards: tr.length ? tr : hand, canReveal: false, isVoid: true };
-    }
-    return { cards: hand, canReveal: false, isVoid: true };
-  }
-  // Trump still hidden: void player may slough, or ask for trump to be revealed.
-  // The bidder may not play a thuruppu without revealing it; with only thuruppu left they must reveal.
-  const cards = hiddenBidder ? eff.filter(c => c.suit !== ts) : eff;
-  return { cards, canReveal: true, isVoid: true };
-}
-
-function reveal(p) {
-  const R = G.R;
-  if (R.phase !== 'play' || R.turn !== p || R.busy) return false;
-  if (!legal(p).canReveal) return false;
-  R.trump.revealed = true; R.trump.revealedBy = p;
-  R.mustPlayTrump = R.trump.suit !== 'NT';
-  log(`${who(p)} ${vb(p, 'calls', 'call')} for thuruppu: ${suitHTML(R.trump.suit)}!`);
-  flash(R.trump.suit);
-  render();
-  return true;
-}
-
-function beats(a, b) {
-  // b is the current best play (led suit or an active trump)
-  if (a.card.suit === b.card.suit) return POWER[a.card.rank] > POWER[b.card.rank]; // tie → earlier card keeps it
-  return a.trumpPlay;
-}
-function winnerIndex(plays) {
-  let best = 0;
-  for (let i = 1; i < plays.length; i++) if (beats(plays[i], plays[best])) best = i;
-  return best;
-}
-const trickPoints = plays => plays.reduce((s, x) => s + POINTS[x.card.rank], 0);
-
-function playCard(p, id) {
-  const R = G.R;
-  if (R.phase !== 'play' || R.turn !== p || R.busy) return;
-  const c = legal(p).cards.find(c => c.id === id);
-  if (!c) return;
-  if (!R.trump.revealed && p === R.bidder && id === R.trump.indicator) {
-    R.trump.revealed = true; R.trump.revealedBy = p;
-    log(`${who(p)} ${vb(p, 'plays', 'play')} the face-down card. Thuruppu is ${suitHTML(R.trump.suit)}!`);
-    flash(R.trump.suit);
-  } else if (!R.trump.revealed && p === R.bidder && R.plays.length === 0 && c.suit === R.trump.suit) {
-    // Forced to lead a thuruppu (nothing else left): leading it reveals it.
-    R.trump.revealed = true; R.trump.revealedBy = p;
-    log(`${who(p)} ${vb(p, 'leads', 'lead')} a thuruppu. It is ${suitHTML(R.trump.suit)}!`);
-    flash(R.trump.suit);
-  }
-  // Public deductions: failing to follow shows a void; a revealer who can't play thuruppu has none.
-  if (!R.voids) R.voids = [[], [], [], [], [], []];
-  const noteVoid = s => { if (!R.voids[p].includes(s)) R.voids[p].push(s); };
-  const heldBack = p === R.bidder && !R.trump.revealed && R.hands[p].some(x => x.id === R.trump.indicator && x.suit === R.plays[0]?.card.suit);
-  if (R.plays.length && c.suit !== R.plays[0].card.suit && !heldBack) noteVoid(R.plays[0].card.suit);
-  if (R.mustPlayTrump && c.suit !== R.trump.suit) noteVoid(R.trump.suit);
-  if (!R.trump.revealed && p === R.bidder && (R.plays.length === 0 || c.suit !== R.plays[0].card.suit)) {
-    R.notTrump = R.notTrump || [];
-    if (!R.notTrump.includes(c.suit)) R.notTrump.push(c.suit);
-  }
-  const trumpPlay = R.trump.revealed && R.trump.suit !== 'NT' && c.suit === R.trump.suit;
-  R.hands[p] = R.hands[p].filter(x => x.id !== id);
-  R.plays.push({ p, card: c, trumpPlay });
-  R.played.add(id);
-  R.mustPlayTrump = false;
-  if (p === 0) UI.sel = null;
-
-  if (R.plays.length === trickSize()) {
-    R.busy = true; R.turn = -1;
-    render();
-    timer = setTimeout(() => finishTrick(R), delay('trick'));
-  } else {
-    R.turn = nextPlayer(p);
-    render(); schedule();
-  }
-}
-
-// ---------- COT: the bidding team claims every one of the 56 points ----------
-// Only on a bid under 40, by any member of the bidding team on their turn, before the 7th trick,
-// and only while the other side has taken nothing. Made: +2 instead of +1. Failed: +3 to the others.
-function canCallCot(p) {
-  const R = G.R;
-  return R.phase === 'play' && !R.busy && R.turn === p && !R.cot && !R.thani && R.high < 40
-    && team(p) === team(R.bidder) && R.trickNo < 6 && R.captured[1 - team(R.bidder)] === 0;
-}
-/** p's team has made its bid, the other side is on 0 and COT can still be called: worth a nudge. */
-function cotHint(p) {
-  const R = G.R, t = team(p);
-  return R.phase === 'play' && !R.cot && !R.thani && R.high < 40 && team(R.bidder) === t
-    && R.trickNo < 6 && R.captured[1 - t] === 0 && R.captured[t] >= R.high;
-}
-function callCot(p) {
-  const R = G.R;
-  if (!canCallCot(p)) return false;
-  R.cot = { by: p, trick: R.trickNo + 1 };
-  log(`${who(p)} ${vb(p, 'calls', 'call')} <b>COT</b>: ${TEAM_NAME[team(p)]} will take all 56 points!`);
-  flashText('Called', 'COT');
-  render();
-  return true;
-}
-
-// In a Thani round the bidder's partners sit out: tricks are the bidder plus the three opponents.
-const sitsOut = q => !!(G.R.thani && q !== G.R.bidder && team(q) === team(G.R.bidder));
-const trickSize = () => G.R.thani ? 4 : 6;
-function nextPlayer(p) {
-  let q = nextSeat(p);
-  while (sitsOut(q)) q = nextSeat(q);
-  return q;
-}
-
-function finishTrick(R) {
-  if (G.R !== R || !R.busy) return;
-  const w = R.plays[winnerIndex(R.plays)].p;
-  const pts = trickPoints(R.plays);
-  R.captured[team(w)] += pts;
-  R.tricksWon[w]++;
-  log(`${who(w)} ${vb(w, 'takes', 'take')} trick ${R.trickNo + 1} <span class="muted">(+${pts} ${TEAM_NAME[team(w)]})</span>.`);
-  R.lastTrick = { plays: R.plays, winner: w, pts };
-  (R.pile = R.pile || []).push(...R.plays.map(x => x.card.id));   // gathered in play order for the next deal
-  R.plays = []; R.trickNo++; R.busy = false;
-  if (R.thani && w !== R.bidder) {             // one lost trick and Thani is over
-    log(`${who(w)} ${vb(w, 'breaks', 'break')} the Thani!`);
-    endRound(); return;
-  }
-  if (R.cot && R.captured[1 - team(R.bidder)] > 0) {   // the other side scored: COT is broken
-    log(`${who(w)} ${vb(w, 'breaks', 'break')} the COT!`);
-    endRound(); return;
-  }
-  if (R.trickNo === 8) { endRound(); return; }
-  const decided = decidedResult(R);
-  if (decided) { finishEarly(R, decided); return; }
-  R.leader = w; R.turn = w;
-  render(); schedule();
+// ---------- Names and log lines, as seen from seat 0 ----------
+const VIEWER = 0;
+const vb = (p, third, you) => (p === VIEWER && NAMES[p] === 'You') ? you : third;
+const who = p => `<span class="lname t${team(p)}">${esc(NAMES[p])}</span>`;
+/** Fill in the engine's log tokens ({@3}, {~3|takes|take}, {&1|gets|get}, {#1}, {$1}). */
+function fmt(s) {
+  return String(s)
+    .replace(/\{@(\d)\}/g, (_, p) => who(+p))
+    .replace(/\{~(\d)\|([^|}]*)\|([^|}]*)\}/g, (_, p, third, you) => vb(+p, third, you))
+    .replace(/\{&(\d)\|([^|}]*)\|([^|}]*)\}/g, (_, t, third, you) => +t === team(VIEWER) ? you : third)
+    .replace(/\{#(\d)\}/g, (_, t) => TEAM_NAME[+t])
+    .replace(/\{\$(\d)\}/g, (_, t) => TEAM_SYM[+t]);
 }
 
 /**
- * Is the round's result already certain? 'set' when the bidding team can no longer reach its bid;
- * 'made' when it has, unless a COT is still possible (bid under 40, other side on 0, before trick 7).
+ * A team's kitty split by colour: [own colour, won from the other team]. Each team starts with 7 of its own
+ * colour, and a team that pays always gives back the other team's colour first. So a team never holds both
+ * fewer than 7 of its own and some of the other's: the split follows from the count alone.
  */
-function decidedResult(R) {
-  if (R.thani) return null;                         // Thani ends on its own (any lost trick, or all 8 won)
-  const bt = team(R.bidder), got = R.captured[bt], opp = R.captured[1 - bt];
-  const left = 56 - got - opp;
-  if (R.cot) return opp === 0 && left === 0 ? 'made' : null;
-  if (got + left < R.high) return 'set';
-  if (got >= R.high && !(R.high < 40 && opp === 0 && R.trickNo < 6)) return 'made';
-  return null;
+function kittyParts(t) { const n = G.kitty[t]; return [Math.min(7, n), Math.max(0, n - 7)]; }
+function kittyText(t) {
+  const [own, won] = kittyParts(t);
+  return `<span class="t${t}c">${TEAM_SYM[t]} ${own}</span>${won ? ` + <span class="t${1 - t}c">${TEAM_SYM[1 - t]} ${won}</span>` : ''}`;
 }
 
-/** Show everyone's remaining cards face-up for a moment, then go to the round summary. */
-function finishEarly(R, kind) {
-  const bt = team(R.bidder);
-  R.decided = { kind, afterTrick: R.trickNo };
-  log(kind === 'set'
-    ? `${TEAM_NAME[bt]} can no longer make ${R.high}. Round decided after trick ${R.trickNo}.`
-    : `${TEAM_NAME[bt]} has made ${R.high}. Round decided after trick ${R.trickNo}.`);
-  R.busy = true; R.turn = -1;
-  UI.overlay = 'decided';
-  render();
-  timer = setTimeout(() => { if (G.R === R) { R.busy = false; endRound(); } }, 2400);
-}
-
-function endRound() {
-  const R = G.R;
-  const bt = team(R.bidder), got = R.captured[bt], bid = R.high;
-  const made = R.thani ? R.tricksWon[R.bidder] === 8 : R.cot ? got === 56 : got >= bid;
-  let gain, to;
-  if (R.cot) { gain = made ? 2 : 3; to = made ? bt : 1 - bt; }                         // COT: all 56 or bust
-  else if (made) { gain = bid >= 56 ? 4 : bid >= 48 ? 3 : bid >= 40 ? 2 : 1; to = bt; }   // Thani scores like 56
-  else { gain = bid >= 56 ? 5 : bid >= 48 ? 4 : bid >= 40 ? 3 : 2; to = 1 - bt; }
-  G.score[to] += gain;
-  R.phase = 'roundEnd';
-  R.result = { made, gain, to, got, bid, bt, thani: !!R.thani, cot: R.cot || null };
-  // Gather the rest (sitting-out partners, or an early Thani finish) so the next pack is complete.
-  for (let q = 0; q < 6; q++) R.pile.push(...R.hands[q].map(c => c.id));
-  G.pile = R.pile.length === 48 ? R.pile.slice() : null;   // the next dealer shuffles this pile
-  log(R.thani
-    ? (made ? `${who(R.bidder)} ${vb(R.bidder, 'wins', 'win')} the Thani: <b>+${gain}</b> ${TEAM_NAME[bt]}.`
-            : `Thani lost: ${TEAM_NAME[to]} <b>+${gain}</b>.`)
-    : R.cot
-    ? (made ? `COT made, all 56 points: ${TEAM_NAME[bt]} <b>+${gain}</b>.` : `COT failed: ${TEAM_NAME[to]} <b>+${gain}</b>.`)
-    : made
-    ? `${TEAM_NAME[bt]} made ${bid} with ${got}: <b>+${gain}</b>.`
-    : `${TEAM_NAME[bt]} went set (${got}/${bid}): ${TEAM_NAME[to]} <b>+${gain}</b>.`);
-  if (isKitty()) settleKitty(R);
-  addCareer(R.result);
-  UI.overlay = 'round';
-  render();
-}
-
-// ---------- Kitty & Joker scoring ----------
-// Each team starts with 7 kitty cards; the round's loser pays the winners as many cards as the game points.
-// A team that runs out gets a Joker on every member (they stack) and the kitty is shared 7 and 7 again.
-// Jokers come off by winning the bidding and making it: in the very first round after the latest Joker
-// every member drops one; later, only the player who made the winning bid drops one of their own.
-const isKitty = () => !!(G && G.mode === 'kitty');
 function setScoring(mode) {
   scoring = mode === 'kitty' ? 'kitty' : 'twelve';
   try { localStorage.setItem(SCORING_KEY, scoring); } catch (e) { /* ignore */ }
 }
-function settleKitty(R) {
-  const r = R.result, loser = 1 - r.to, bt = r.bt;
-  const paid = Math.min(r.gain, G.kitty[loser]);
-  G.kitty[loser] -= paid; G.kitty[r.to] += paid;
-  r.kitty = { paid, from: loser, after: G.kitty.slice() };
-  log(`${TEAM_NAME[loser]} ${paid === 1 ? 'pays 1 kitty card' : `pays ${paid} kitty cards`} <span class="muted">(${TEAM_SYM[0]} ${G.kitty[0]} · ${TEAM_SYM[1]} ${G.kitty[1]})</span>.`);
-
-  // 1. Removing Jokers: the bidding team won the bidding and made it.
-  const seatsOf = t => [0, 1, 2, 3, 4, 5].filter(s => team(s) === t);
-  r.jokerOff = [];
-  if (r.made && seatsOf(bt).some(s => G.joker[s] > 0)) {
-    const off = G.jokerFresh[bt] ? seatsOf(bt).filter(s => G.joker[s] > 0) : (G.joker[R.bidder] > 0 ? [R.bidder] : []);
-    off.forEach(s => G.joker[s]--);
-    r.jokerOff = off;
-    if (off.length > 1) log(`🃏 ${TEAM_NAME[bt]} made it straight away: everyone removes a Joker.`);
-    else if (off.length === 1) log(`🃏 ${who(off[0])} ${vb(off[0], 'removes', 'remove')} a Joker.`);
-    else log(`🃏 ${who(R.bidder)} ${vb(R.bidder, 'has', 'have')} no Joker to remove.`);
-  }
-  G.jokerFresh = [false, false];                     // the "first round after" chance is used up either way
-
-  // 2. Running out: Joker for the whole team, kitty shared out again.
-  r.jokerTo = null;
-  if (G.kitty[loser] === 0) {
-    seatsOf(loser).forEach(s => G.joker[s]++);
-    G.jokerFresh[loser] = true;
-    G.kitty = [7, 7];
-    r.jokerTo = loser;
-    log(`🃏 <b>${TEAM_NAME[loser]} ran out of kitty cards and ${loser === 0 ? 'get' : 'gets'} a Joker!</b> Kitty shared out 7 and 7 again.`);
-  }
-  if (r.jokerTo != null || r.jokerOff.length) flashText(r.jokerTo != null ? 'Joker for' : 'Joker removed',
-    r.jokerTo != null ? `${TEAM_SYM[r.jokerTo]} 🃏` : '🃏');
-}
-
-const matchOver = () => !isKitty() && (G.score[0] >= TARGET || G.score[1] >= TARGET);
-
 // ---------- Career score ----------
 // Game points added up silently across every round and both scoring styles (in Kitty & Joker the same
 // points still count, including kitty exchanges). Only a new set of teams (an Ace draw) starts it afresh.
@@ -646,393 +177,11 @@ function careerHTML() {
     <div class="muted career-sub">${c.rounds} round${c.rounds === 1 ? '' : 's'} played${c.matches[0] + c.matches[1] ? ` · matches to 12 won ${TEAM_SYM[0]} ${c.matches[0]} · ${TEAM_SYM[1]} ${c.matches[1]}` : ''}</div></div>`;
 }
 
-function nextRound() {
-  UI.overlay = null;
-  if (matchOver()) { newMatch(); return; }
-  G.dealer = nextSeat(G.dealer);
-  startRound();
-}
-
-// =========================================================================
-//  AI
-// =========================================================================
-function suitStrength(hand, s) {
-  const W = { J: 5, '9': 3, A: 1.5, '10': 1, K: 0.5, Q: 0.5 };
-  const cs = hand.filter(c => c.suit === s);
-  return cs.reduce((t, c) => t + W[c.rank], 0) + cs.length * 1.5;
-}
-function bestSuit(hand) {
-  let best = null, bv = -1;
-  for (const s of SUITS) {
-    const v = suitStrength(hand, s);
-    if (v > bv) { bv = v; best = s; }
-  }
-  return { suit: best, value: bv };
-}
-
-function aiBid(p) {
-  const R = G.R, hand = R.hands[p];
-  const { suit, value } = bestSuit(hand);
-  const side = hand.filter(c => c.suit !== suit)
-    .reduce((t, c) => t + (c.rank === 'J' ? 2 : c.rank === '9' ? 0.5 : 0), 0);
-  const noise = Math.random() * 2 - 1;
-  const max = R.phase === 'bidding2'
-    ? Math.floor(16.5 + (value + side) * 1.1 + noise)   // 8 cards: only very strong hands reach 40
-    : Math.floor(23 + (value + side) * 0.9 + noise);
-  const all = legalBids(p);
-  if (all.includes(THANI) && (sureThani(hand) || thaniOdds(hand) >= THANI_NERVE)) return THANI;
-  const options = all.filter(v => v !== THANI);
-  if (!options.length) return null;
-  const nxt = options[0];
-  if (R.high === 0) return nxt;          // forced opening bid
-  return nxt <= max ? nxt : null;
-}
-
-/**
- * A hand that cannot lose a trick when it leads every one with no trumps:
- * for every card held, every higher card of that suit is also in the hand
- * (an equal card elsewhere doesn't matter, because the first one played wins).
- * E.g. J J 9 9 of spades plus J J 9 9 of hearts: lead the Jacks, then the 9s.
- */
-const isTop = (c, hand) => CARDS.every(o => o.suit !== c.suit || POWER[o.rank] <= POWER[c.rank] || hand.some(h => h.id === o.id));
-function sureThani(hand) { return hand.every(c => isTop(c, hand)); }
-
-/**
- * How likely is a Thani to succeed with this hand? Deal the 40 unseen cards at random many times
- * (24 to the three opponents, 16 to the partners who sit out) and play it out: the caller leads
- * a card nobody can beat, opponents follow suit keeping their high cards, and a single trick lost
- * ends it. A missing higher card may be with a partner, or an opponent may be forced to play it.
- */
-const THANI_NERVE = 0.65;   // call when about 2 in 3 deals work out (+4 if won vs +5 to them if lost)
-function thaniOdds(hand, samples = 240) {
-  if (hand.filter(c => isTop(c, hand)).length < 4) return 0;   // nowhere near: don't bother
-  const mine = new Set(hand.map(c => c.id));
-  const unknown = CARDS.filter(c => !mine.has(c.id));
-  let wins = 0;
-  for (let s = 0; s < samples; s++) {
-    const u = shuffle(unknown.slice());
-    if (simThani(hand.slice(), [u.slice(0, 8), u.slice(8, 16), u.slice(16, 24)])) wins++;
-  }
-  return wins / samples;
-}
-function simThani(my, opp) {
-  const beatable = c => opp.some(h => h.some(o => o.suit === c.suit && POWER[o.rank] > POWER[c.rank]));
-  while (my.length) {
-    const safe = my.filter(c => !beatable(c)).sort((a, b) => POWER[b.rank] - POWER[a.rank]);
-    if (!safe.length) return false;
-    const lead = safe[0];
-    my.splice(my.indexOf(lead), 1);
-    for (const h of opp) {
-      const follow = h.filter(o => o.suit === lead.suit);
-      const pool = follow.length ? follow : h;          // void: throw the least useful card
-      pool.sort((a, b) => POWER[a.rank] - POWER[b.rank]);
-      h.splice(h.indexOf(pool[0]), 1);
-    }
-  }
-  return true;
-}
-
-function aiTrump(p) {
-  const hand = G.R.hands[p];
-  const { suit } = bestSuit(hand);
-  const cs = hand.filter(c => c.suit === suit).sort((a, b) => POWER[a.rank] - POWER[b.rank]);
-  return cs[0].id; // lowest card of the best suit goes face-down
-}
-
-function knownTrump(p) {
-  const R = G.R;
-  if ((R.trump.revealed || p === R.bidder) && R.trump.suit !== 'NT') return R.trump.suit;
-  return null;
-}
-/** Unseen cards (from p's perspective) of the same suit that strictly outrank `card`. */
-function unseenHigher(card, p) {
-  const R = G.R;
-  const mine = new Set(R.hands[p].map(c => c.id));
-  return CARDS.filter(c => c.suit === card.suit && POWER[c.rank] > POWER[card.rank]
-    && !R.played.has(c.id) && !mine.has(c.id)).length;
-}
-function unseenOfSuit(s, p) {
-  const R = G.R;
-  const mine = new Set(R.hands[p].map(c => c.id));
-  return CARDS.filter(c => c.suit === s && !R.played.has(c.id) && !mine.has(c.id)).length;
-}
-function wouldWin(p, c) {
-  const R = G.R;
-  const tp = R.trump.revealed && R.trump.suit !== 'NT' && c.suit === R.trump.suit;
-  const sim = [...R.plays, { p, card: c, trumpPlay: tp }];
-  return sim[winnerIndex(sim)].p === p;
-}
-
-// ---------- Card sense: what might the players still to play be holding? ----------
-// Bots only use public information: cards played, hand sizes, suits players have shown void in,
-// suits the bidder has shown are not thuruppu, and their own hand.
-function playersAfter(p) {
-  const a = [];
-  let q = p;
-  for (let i = G.R.plays.length + 1; i < trickSize(); i++) { q = nextPlayer(q); a.push(q); }
-  return a;
-}
-function isVoidKnown(q, s) { const v = G.R.voids; return !!(v && v[q] && v[q].includes(s)); }
-function unseenCards(p) {
-  const R = G.R;
-  const mine = new Set(R.hands[p].map(c => c.id));
-  return CARDS.filter(c => !R.played.has(c.id) && !mine.has(c.id));
-}
-/** Chance that q holds at least one of k unseen cards of suit s, spread over everyone who could hold them. */
-function pHolds(q, k, s, p) {
-  if (k <= 0 || isVoidKnown(q, s)) return 0;
-  const R = G.R;
-  let N = 0;
-  for (let x = 0; x < 6; x++) if (x !== p && !sitsOut(x) && !isVoidKnown(x, s)) N += R.hands[x].length;
-  const n = R.hands[q].length;
-  if (!N || !n) return 0;
-  return 1 - Math.pow(1 - Math.min(1, n / N), k);
-}
-function pVoid(q, s, p, unseen) {
-  if (isVoidKnown(q, s)) return 1;
-  return 1 - pHolds(q, unseen.filter(c => c.suit === s).length, s, p);
-}
-/** Chance that q, who plays after p, takes the trick away from `best`. */
-function beatProb(q, best, p, unseen) {
-  const R = G.R;
-  const led = R.plays[0].card.suit;
-  if (best.trumpPlay) {                                   // q needs a higher thuruppu
-    const ts = R.trump.suit;
-    const higher = unseen.filter(c => c.suit === ts && POWER[c.rank] > POWER[best.card.rank]).length;
-    const pv = led === ts ? 1 : pVoid(q, led, p, unseen);
-    return pv * pHolds(q, higher, ts, p);
-  }
-  // q beats with a higher card of the led suit…
-  const higher = unseen.filter(c => c.suit === led && POWER[c.rank] > POWER[best.card.rank]).length;
-  const pHigh = pHolds(q, higher, led, p);
-  // …or by being void and cutting.
-  const pv = pVoid(q, led, p, unseen);
-  let pCut = 0;
-  const kt = knownTrump(p);
-  if (R.trump.revealed) {
-    if (R.trump.suit !== 'NT' && R.trump.suit !== led)
-      pCut = 0.9 * pHolds(q, unseen.filter(c => c.suit === R.trump.suit).length, R.trump.suit, p);
-  } else if (p === R.bidder) {
-    if (kt && kt !== led) pCut = 0.6 * pHolds(q, unseen.filter(c => c.suit === kt).length, kt, p);
-  } else {
-    const cand = SUITS.filter(s => s !== led && !(R.notTrump || []).includes(s));
-    if (cand.length) pCut = q === R.bidder ? 0.85 * 0.7 : 0.5 * 0.55; // has one × chooses to ask
-  }
-  return Math.min(1, pHigh + pv * pCut);
-}
-const asPlay = (p, c) => ({ p, card: c, trumpPlay: G.R.trump.revealed && G.R.trump.suit !== 'NT' && c.suit === G.R.trump.suit });
-/** Chance `best` still wins after everyone left to play (as seen by p). */
-function holdProb(best, p) {
-  const unseen = unseenCards(p);
-  let h = 1;
-  for (const q of playersAfter(p)) if (team(q) !== team(best.p)) h *= 1 - beatProb(q, best, p, unseen);
-  return h;
-}
-/** Chance one of p's partners still to play takes the trick off the opponents. */
-function partnerRescue(p, best) {
-  const unseen = unseenCards(p);
-  let miss = 1;
-  for (const q of playersAfter(p)) if (team(q) === team(p)) miss *= 1 - beatProb(q, best, p, unseen);
-  return 1 - miss;
-}
-
-function botPlay(p) {
-  const R = G.R;
-  if (R.phase !== 'play' || R.turn !== p || R.busy) return;
-  if (canCallCot(p) && aiWantsCot(p)) callCot(p);
-  const L = legal(p);
-  if (L.canReveal && (L.cards.length === 0 || aiWantsReveal(p))) {
-    reveal(p);
-    timer = setTimeout(() => {
-      if (G.R !== R) return;
-      playCard(p, aiPickCard(p, legal(p).cards).id);
-    }, 700);
-    return;
-  }
-  playCard(p, aiPickCard(p, L.cards).id);
-}
-
-/**
- * Should a player who can't follow suit ask for the thuruppu ("cut")?
- * Weighs it the way a player at the table would:
- *  - how likely I am to hold a thuruppu at all, from what the table has seen
- *    (the bidder never leads or discards a hidden thuruppu, so those suits are ruled out);
- *  - what the trick is worth if I take it: points already down, plus what my partners
- *    still to play will throw in once they see me winning, plus taking the lead;
- *  - the risk an opponent still to play over-cuts me (higher if it is the bidder);
- *  - the cost of exposing the thuruppu, which helps the bidder's side if I am defending
- *    and gives up the bidder's secret if I am the bidder. Cheaper late in the round.
- */
-/**
- * Call COT when I'm on lead and every card I hold is a certain winner from here:
- * a thuruppu with no higher one still out, or a top card of its suit with no thuruppu
- * left anywhere to cut it. Leading them one by one then takes every remaining trick.
- */
-function aiWantsCot(p) {
-  const R = G.R;
-  if (R.plays.length !== 0) return false;
-  const ts = R.trump.revealed ? (R.trump.suit === 'NT' ? null : R.trump.suit)
-    : (p === R.bidder ? (R.trump.suit === 'NT' ? null : R.trump.suit) : undefined);
-  if (ts === undefined) return false;                 // I don't know the thuruppu: too risky
-  const trumpsOut = ts ? unseenOfSuit(ts, p) : 0;
-  return R.hands[p].every(c => unseenHigher(c, p) === 0 && (c.suit === ts || trumpsOut === 0));
-}
-
-function aiWantsReveal(p) {
-  const R = G.R, plays = R.plays, n = plays.length;
-  const wPlay = plays[winnerIndex(plays)];
-  const led = plays[0].card.suit;
-  const hand = R.hands[p];
-
-  // How likely am I to hold a thuruppu?
-  let pHave;
-  if (p === R.bidder) {
-    if (R.trump.suit === 'NT') return false;
-    pHave = hand.some(c => c.suit === R.trump.suit) ? 1 : 0;
-  } else {
-    const cand = SUITS.filter(s => !(R.notTrump || []).includes(s));
-    if (!cand.length) return false;                 // looks like no trump: nothing to gain
-    pHave = cand.filter(s => s !== led && hand.some(c => c.suit === s)).length / cand.length;
-  }
-  if (pHave === 0) return false;
-
-  // Who still plays after me, and could they over-cut me?
-  const after = playersAfter(p);
-  const unseen = unseenCards(p);
-  const partnersAfter = after.filter(q => team(q) === team(p)).length;
-  const oppsAfter = after.length - partnersAfter;
-  let hold = 1;
-  for (const q of after) {
-    if (team(q) === team(p)) continue;
-    let risk;
-    if (p === R.bidder) {                               // I know the thuruppu: count higher ones still out
-      const ts = R.trump.suit;
-      const lifted = hand.find(c => c.id === R.trump.indicator);   // I must cut with my face-down card
-      if (!lifted) return false;
-      const myTop = POWER[lifted.rank];
-      risk = pVoid(q, led, p, unseen) * pHolds(q, unseen.filter(c => c.suit === ts && POWER[c.rank] > myTop).length, ts, p);
-    } else {
-      risk = pVoid(q, led, p, unseen) * (q === R.bidder ? 0.85 : 0.5) * 0.5;  // void, holds one, and it's higher
-    }
-    hold *= 1 - risk;
-  }
-
-  const pts = trickPoints(plays);
-  let stake = pts + 1.5 * partnersAfter + 0.3 * oppsAfter + 1;
-
-  if (team(wPlay.p) === team(p)) {
-    // My partner is winning right now. Will it last through the opponents still to play?
-    const partnerHold = holdProb(wPlay, p);
-    if (partnerHold >= 0.7) return false;
-    stake *= 1 - partnerHold;
-  } else {
-    // An opponent is winning. Might a partner after me take it anyway?
-    stake *= 1 - 0.7 * partnerRescue(p, wPlay);
-  }
-
-  const late = R.trickNo >= 5;
-  let revealCost = 0;
-  if (p === R.bidder) revealCost = late ? 0.3 : 1.0;
-  else if (team(R.bidder) !== team(p)) revealCost = late ? 0.2 : 0.6;
-
-  const mood = Math.random() * 0.6 - 0.3;          // players aren't machines
-  const ev = pHave * hold * stake - (1 - pHave) * 0.5 - revealCost + mood;
-  return ev >= 1.4;
-}
-
-function aiPickCard(p, cards) {
-  const R = G.R;
-  if (cards.length === 1) return cards[0];
-  const kt = knownTrump(p);
-  const isT = c => (kt && c.suit === kt) ? 1 : 0;
-  const byLow = (a, b) => isT(a) - isT(b) || POINTS[a.rank] - POINTS[b.rank] || POWER[a.rank] - POWER[b.rank];
-  const lowest = () => [...cards].sort(byLow)[0];
-  const lowPow = (a, b) => POWER[a.rank] - POWER[b.rank];
-
-  if (R.plays.length === 0) return aiLead(p, cards, kt, isT);
-
-  const plays = R.plays;
-  const wPlay = plays[winnerIndex(plays)];
-  const partnerWinning = team(wPlay.p) === team(p);
-  const pts = trickPoints(plays);
-  const last = plays.length === trickSize() - 1;
-  const led = plays[0].card.suit;
-  const partnersAfter = playersAfter(p).filter(q => team(q) === team(p)).length;
-
-  // Throwing points to a partner. Void with the thuruppu hidden, any 9 or J might be a thuruppu.
-  const blindDiscard = !R.trump.revealed && !kt && cards[0].suit !== led;
-  const feedCard = generous => {
-    const w = blindDiscard || !generous
-      ? { '10': 1.6, A: 1.5, '9': 0.3, J: 0.2, K: 0.1, Q: 0 }
-      : { '9': 2, '10': 1.6, A: 1.5, J: R.trickNo >= 6 ? 3 : 0.4, K: 0.1, Q: 0 };
-    const pool = cards.filter(c => !isT(c));
-    return pool.length ? pool.sort((a, b) => w[b.rank] - w[a.rank])[0] : lowest();
-  };
-
-  if (partnerWinning) {
-    // My partner is winning right now. Can the opponents still to play take it?
-    const hold = last ? 1 : holdProb(wPlay, p);
-    if (hold >= 0.65) return feedCard(hold >= 0.85);
-    // Shaky. If I can win it myself with something much safer, do that.
-    if (pts >= 2) {
-      const safer = cards.filter(c => wouldWin(p, c))
-        .map(c => ({ c, h: holdProb(asPlay(p, c), p) }))
-        .filter(o => o.h >= Math.max(0.75, hold + 0.25))
-        .sort((a, b) => isT(a.c) - isT(b.c) || POWER[a.c.rank] - POWER[b.c.rank]);
-      if (safer.length) return safer[0].c;
-    }
-    return hold >= 0.6 ? feedCard(false) : lowest();
-  }
-
-  // An opponent is winning. Look at each card that would take the lead now and ask
-  // how likely it is to survive the players still to come.
-  const winners = cards.filter(c => wouldWin(p, c));
-  if (winners.length) {
-    if (last) return winners.sort((a, b) => isT(a) - isT(b) || lowPow(a, b))[0];   // nobody left: cheapest winner
-    const options = winners.map(c => ({ c, h: holdProb(asPlay(p, c), p) }));
-    // The cheapest card that will probably hold (don't burn a thuruppu on an empty trick).
-    const safe = options.filter(o => o.h >= 0.6)
-      .sort((a, b) => isT(a.c) - isT(b.c) || POWER[a.c.rank] - POWER[b.c.rank]);
-    if (safe.length && (pts >= 1 || !isT(safe[0].c))) return safe[0].c;
-    // Nothing safe, but plenty on the table: go with my best chance.
-    if (pts >= 3) return options.sort((a, b) => b.h - a.h || POWER[a.c.rank] - POWER[b.c.rank])[0].c;
-  }
-  return lowest();
-}
-
-function aiLead(p, cards, kt, isT) {
-  const R = G.R;
-  const highPow = (a, b) => POWER[b.rank] - POWER[a.rank];
-  const ourBid = team(R.bidder) === team(p);
-  if (R.thani) {
-    // Thani: cash the unbeatable cards first (Jacks before the 9s they protect), else the highest card.
-    const sure = cards.filter(c => unseenHigher(c, p) === 0);
-    return (sure.length ? sure : cards).sort(highPow)[0];
-  }
-  if (R.trump.revealed && kt && ourBid) {
-    const mt = cards.filter(c => isT(c) && unseenHigher(c, p) === 0);
-    if (mt.length) return mt.sort(highPow)[0];
-  }
-  const non = cards.filter(c => !isT(c));
-  const pool = non.length ? non : cards;
-  const masters = pool.filter(c => unseenHigher(c, p) === 0 && POINTS[c.rank] > 0);
-  if (masters.length) return masters.sort(highPow)[0];
-  const count = {};
-  pool.forEach(c => { count[c.suit] = (count[c.suit] || 0) + 1; });
-  return [...pool].sort((a, b) => POINTS[a.rank] - POINTS[b.rank] || count[b.suit] - count[a.suit]
-    || POWER[a.rank] - POWER[b.rank])[0];
-}
-
 // =========================================================================
 //  Persistence (per-device convenience only)
 // =========================================================================
-function serialize() {
-  return G ? JSON.stringify(G, (k, v) => v instanceof Set ? { __set: [...v] } : v) : null;
-}
-function deserialize(s) {
-  return JSON.parse(s, (k, v) => (v && v.__set) ? new Set(v.__set) : v);
-}
 function save() {
+  if (NET.on) return;                                  // an online table lives on the server
   try { const s = serialize(); if (s) localStorage.setItem(SAVE_KEY, s); } catch (e) { /* ignore */ }
 }
 function loadSaved() {
@@ -1043,10 +192,8 @@ function resume(g) {
   const R = G.R;
   UI.overlay = R.phase === 'roundEnd' ? 'round' : null;
   UI.sel = null;
-  if (R.decided && R.phase === 'play') { R.busy = false; endRound(); return; }   // was showing the early finish
-  render();
-  if (R.busy) timer = setTimeout(() => finishTrick(R), 700);
-  else schedule();
+  if (R.decided && R.phase === 'play') { R.busy = false; endRound(); }   // was showing the early finish
+  update();                                                                // a pending trick or bot turn carries on
 }
 
 // =========================================================================
@@ -1094,7 +241,9 @@ function renderTop() {
   const R = G.R;
   const pct = t => Math.min(100, G.score[t] / TARGET * 100);
   if (isKitty()) {
-    const stack = t => `<i class="kit-stack">${'<i></i>'.repeat(G.kitty[t])}</i>`;
+    // Own-colour cards first, then any won from the other team (in that team's colour).
+    const stack = t => { const [own, won] = kittyParts(t);
+      return `<i class="kit-stack">${`<i class="k${t}"></i>`.repeat(own)}${`<i class="k${1 - t}"></i>`.repeat(won)}</i>`; };
     const held = t => [0, 1, 2, 3, 4, 5].filter(s => team(s) === t).reduce((n, s) => n + G.joker[s], 0);
     const tally = t => held(t) ? `<span class="jk-tally" title="Jokers held now">🃏${held(t)}</span>` : '';
     $('#match').innerHTML = `
@@ -1134,6 +283,12 @@ function renderTable() {
     if (R.bidder === p && R.phase !== 'bidding') tags += `<span class="tag bidder" title="Bidder">★${bidLabel(R.high)}</span>`;
     if (R.phase !== 'roundEnd' && sitsOut(p)) { tags += '<span class="tag out" title="Sits out the Thani">out</span>'; cls.push('sitting'); }
     else if (R.phase === 'play' || R.phase === 'roundEnd') tags += `<span class="tag tricks" title="Tricks taken">${R.tricksWon[p]}</span>`;
+    if (NET.on && p !== 0) {                                     // who is a bot, offline or away at an online table
+      const s = netSeat(p);
+      if (s && !s.human) tags += '<span class="tag bot" title="Played by a bot">bot</span>';
+      else if (s && !s.connected) { tags += '<span class="tag off" title="Connection lost">offline</span>'; cls.push('dropped'); }
+      else if (s && s.away) tags += '<span class="tag off" title="A bot is playing for them">away</span>';
+    }
     let bubble = '';
     if (isBidding(R) && R.lastBid[p] != null)
       bubble = `<span class="bubble ${R.lastBid[p] === 'Pass' ? 'pass' : ''}">${R.lastBid[p] === 'Pass' ? 'Pass' : bidLabel(R.lastBid[p])}</span>`;
@@ -1163,7 +318,8 @@ function renderTable() {
   $('#seats').innerHTML = html;
 }
 
-function renderSheet() {
+function renderSheet() { renderSheetBase(); netSheetExtras(); }
+function renderSheetBase() {
   const R = G.R;
   const el = $('#sheet');
   const highTxt = R.high ? `Highest <b>${bidLabel(R.high)}</b> · ${who(R.bidder)}` : 'Opening bid is compulsory';
@@ -1202,7 +358,7 @@ function renderSheet() {
   }
 
   if (R.phase === 'trump') {
-    if (R.bidder !== 0) { el.innerHTML = waitHTML(`${who(R.bidder)} won at ${R.high}`, 'Choosing the thuruppu…'); return; }
+    if (R.bidder !== 0) { el.innerHTML = waitHTML(`Highest bidder: ${who(R.bidder)} · ${bidLabel(R.high)}`, 'Choosing the thuruppu…'); return; }
     if (UI.ntAsk) {   // No trump must be a deliberate choice
       el.innerHTML = `<div class="sheet-head"><div class="sheet-title">Play with no trump?</div>
         <div class="sheet-sub">No suit will be trump this round, and everyone is told straight away.</div></div>
@@ -1303,7 +459,12 @@ function renderOverlay() {
   o.hidden = false;
   o.className = 'overlay ' + kind;
   if (kind === 'intro') o.innerHTML = introHTML();
-  else if (kind === 'menu') o.innerHTML = menuHTML();
+  else if (kind === 'menu') o.innerHTML = NET.on ? onlineMenuHTML() : menuHTML();
+  else if (kind === 'friends') o.innerHTML = friendsHTML();
+  else if (kind === 'lobby') o.innerHTML = lobbyHTML();
+  else if (kind === 'confirmLeave') o.innerHTML = `<div class="box"><h2>Leave the table?</h2>
+      <p>A bot takes your seat. You can join again with the code while the game is on.</p>
+      <div class="row end"><button class="btn" data-act="back">Stay</button><button class="btn primary" data-act="leaveTable">Leave</button></div></div>`;
   else if (kind === 'rules') o.innerHTML = rulesHTML();
   else if (kind === 'log') o.innerHTML = logHTML();
   else if (kind === 'names') o.innerHTML = namesHTML();
@@ -1333,12 +494,15 @@ function introHTML() {
       <li><b>J 9 A 10 K Q</b><span>high to low</span></li>
       <li><b>3 · 2 · 1 · 1</b><span>points for J, 9, A, 10</span></li>
       <li><b>Thuruppu</b><span>the bid winner's hidden trump</span></li>
-      <li><b>${TARGET}</b><span>game points wins the match</span></li>
+      ${scoring === 'kitty'
+        ? '<li><b>7 · 7</b><span>kitty cards; run out and your team gets a Joker</span></li>'
+        : `<li><b>${TARGET}</b><span>game points wins the match</span></li>`}
     </ul>
     <div class="col">
-      ${saved ? `<button class="btn primary wide" data-act="resume">Continue · round ${saved.roundNo}, ${saved.score[0]}–${saved.score[1]}</button>
+      ${saved ? `<button class="btn primary wide" data-act="resume">Continue · round ${saved.roundNo}, ${saved.mode === 'kitty' ? `kitty ${saved.kitty[0]}–${saved.kitty[1]}` : `${saved.score[0]}–${saved.score[1]}`}</button>
                  <button class="btn wide" data-act="new">New match</button>`
               : '<button class="btn primary wide" data-act="new">Start match</button>'}
+      <button class="btn wide friends-btn" data-act="friends">Play with friends</button>
       <button class="btn ghost wide" data-act="names">Player names</button>
       ${TEAMS.drawn ? '<button class="btn ghost wide" data-act="shuffleTeams">Shuffle teams</button>' : ''}
       ${scoringSeg()}
@@ -1419,6 +583,12 @@ function scoringSeg() {
   </div>`;
 }
 
+/** Bot speed buttons. `attr` is the data attribute the buttons carry, or null to show them disabled (online guests). */
+function speedSeg(cur, attr) {
+  return `<div class="seg" role="group" aria-label="Bot speed"><span>Bot speed</span>
+    ${Object.keys(SPEEDS).map(v => `<button class="segbtn ${cur === v ? 'on' : ''}" ${attr ? `${attr}="${v}"` : 'disabled'}>${SPEED_LABEL[v]}</button>`).join('')}</div>`;
+}
+
 function versionHTML() {
   return `<div class="ver"><b>Version ${APP_VERSION.name}</b> (build ${APP_VERSION.build}) · ${APP_VERSION.date}<br>${APP_VERSION.note}</div>`;
 }
@@ -1430,11 +600,7 @@ function menuHTML() {
       <button class="btn wide" data-act="names">Player names</button>
       <button class="btn wide" data-act="shuffleTeams">Shuffle teams</button>
       <button class="btn wide" data-act="rules">How to play</button>
-      <div class="seg" role="group" aria-label="Bot speed">
-        <span>Bot speed</span>
-        <button class="segbtn ${speed === 'normal' ? 'on' : ''}" data-speed="normal">Normal</button>
-        <button class="segbtn ${speed === 'fast' ? 'on' : ''}" data-speed="fast">Fast</button>
-      </div>
+      ${speedSeg(speed, 'data-speed')}
       ${scoringSeg()}
       <button class="btn wide" data-act="askNew">New match</button>
       <button class="btn primary wide" data-act="back">Back to table</button>
@@ -1442,7 +608,7 @@ function menuHTML() {
 }
 
 function logHTML() {
-  return `<div class="box log"><h2>Game log</h2><ul>${G.log.map(l => `<li>${l}</li>`).join('')}</ul>
+  return `<div class="box log"><h2>Game log</h2><ul>${G.log.map(l => `<li>${fmt(l)}</li>`).join('')}</ul>
     <div class="row end"><button class="btn primary" data-act="back">Back to table</button></div></div>`;
 }
 
@@ -1471,7 +637,7 @@ function roundHTML() {
       <div><dt>Kitty</dt><dd>${TEAM_NAME[r.kitty.from]} ${r.kitty.from === 0 ? 'pay' : 'pays'} <b>${r.kitty.paid}</b> card${r.kitty.paid === 1 ? '' : 's'}</dd></div>
       ${r.jokerOff && r.jokerOff.length ? `<div><dt>Joker removed</dt><dd>🃏 ${r.jokerOff.map(who).join(', ')}</dd></div>` : ''}
       ${r.jokerTo != null ? `<div><dt>Joker!</dt><dd class="bad">🃏 ${TEAM_NAME[r.jokerTo]} ran out; kitty reset to 7 · 7</dd></div>` : ''}
-      <div><dt>Kitty now</dt><dd><span class="t0c">${TEAM_SYM[0]} ${G.kitty[0]}</span> · <span class="t1c">${TEAM_SYM[1]} ${G.kitty[1]}</span></dd></div>
+      <div><dt>Kitty now</dt><dd>${TEAM_NAME[0]}: ${kittyText(0)}<br>${TEAM_NAME[1]}: ${kittyText(1)}</dd></div>
       <div><dt>Jokers now</dt><dd>${G.joker.some(j => j > 0)
         ? [0, 1, 2, 3, 4, 5].filter(s => G.joker[s] > 0).map(s => `<span class="t${team(s)}c">${esc(NAMES[s])}</span>${G.joker[s] > 1 ? ' ×' + G.joker[s] : ''}`).join(', ')
         : '<span class="muted">none</span>'}</dd></div>`
@@ -1479,9 +645,10 @@ function roundHTML() {
       <div><dt>Game points</dt><dd><b>+${r.gain}</b> to ${TEAM_NAME[r.to]}</dd></div>
       <div><dt>Match</dt><dd><span class="t0c">${TEAM_SYM[0]} ${G.score[0]}</span> · <span class="t1c">${TEAM_SYM[1]} ${G.score[1]}</span> <span class="muted">to ${TARGET}</span></dd></div>`}
     </dl>
-    ${careerHTML()}
+    ${NET.on ? '' : careerHTML()}
     ${over ? `<div class="champ ${winTeam === 0 ? 'good' : 'bad'}">${winTeam === 0 ? 'Your team wins the match!' : `${TEAM_NAME[winTeam]} wins the match.`}</div>` : ''}
-    <div class="row end"><button class="btn ghost" data-act="log">Log</button><button class="btn primary" data-act="next">${over ? 'New match' : 'Next round'}</button></div></div>`;
+    ${NET.on ? roundWaitHTML() : ''}
+    <div class="row end"><button class="btn ghost" data-act="log">Log</button><button class="btn primary" data-act="next" ${NET.on && NET.msg && NET.msg.seats[NET.msg.you].ready ? 'disabled' : ''}>${over ? 'New match' : 'Next round'}</button></div></div>`;
 }
 
 function rulesHTML() {
@@ -1506,7 +673,7 @@ function rulesHTML() {
   <h3>Scoring</h3>
   <p>If the bidding team takes at least its bid it scores 1 (28–39), 2 (40–47), 3 (48–55) or 4 (56). If it falls short, the other team scores 2 (28–39), 3 (40–47), 4 (48–55) or 5 (56). Thani scores the same as 56. A COT scores 2 if made and 3 to the other team if not.</p>
   <p><b>First to 12</b> (Scoring setting): game points add up and the first team to ${TARGET} wins the match.</p>
-  <p><b>Kitty &amp; Joker</b>: each team starts with a kitty of 7 cards. After each round the losing team pays the winners as many kitty cards as the game points. A team that runs out gets a <b>Joker</b> on every member (Jokers add up) and the kitty is shared out 7 and 7 again. To remove Jokers, the team must win the bidding and make the bid (any bid, Thani or a made COT): in the very first round after its latest Joker, every member removes one; after that, only the player who made the winning bid removes one of their own.</p>
+  <p><b>Kitty &amp; Joker</b>: each team starts with a kitty of 7 cards. After each round the losing team pays the winners as many kitty cards as the game points. A team that runs out gets a <b>Joker</b> on every member (Jokers add up) and the kitty is shared out 7 and 7 again. Kitty cards are in team colours: a team that pays gives back the other team's cards first, so a kitty of 10 shows as 7 of its own colour plus 3 won. To remove Jokers, the team must win the bidding and make the bid (any bid, Thani or a made COT): in the very first round after its latest Joker, every member removes one; after that, only the player who made the winning bid removes one of their own.</p>
   <p><b>Career score</b> (in the menu and the round summary): every round's game points keep adding up in the background, whichever scoring you play. A new Ace draw starts it again.</p>
   <div class="row end"><button class="btn primary" data-act="back">Got it</button></div></div>`;
 }
@@ -1535,7 +702,7 @@ function openOverlay(kind) {
 function onAction(act) {
   const R = G && G.R;
   switch (act) {
-    case 'new': if (!TEAMS.drawn) startDraw(); else newMatch(); return;
+    case 'new': if (!TEAMS.drawn) startDraw(); else startMatch(); return;
     case 'shuffleTeams':
       if (G && !matchOver() && UI.overlay !== 'intro') { UI.overlay = 'confirmShuffle'; renderOverlay(); }
       else startDraw();
@@ -1543,11 +710,11 @@ function onAction(act) {
     case 'drawgo': startDraw(); return;
     case 'scoringYes':
       setScoring(UI.pendingScoring || scoring); UI.pendingScoring = null; overlayReturn = null;
-      if (TEAMS.drawn) { newMatch(); render(); } else startDraw();
+      if (TEAMS.drawn) startMatch(); else startDraw();
       return;
     case 'drawskip': if (UI.draw) { UI.draw.step = UI.draw.seq.length; clearInterval(drawTimer); renderOverlay(); } return;
     case 'drawstart': finishDraw(); return;
-    case 'resume': { const s = loadSaved(); if (s) resume(s); else newMatch(); return; }
+    case 'resume': { const s = loadSaved(); if (s) resume(s); else startMatch(); return; }
     case 'menu': openOverlay('menu'); return;
     case 'rules': case 'log': case 'names': openOverlay(act); return;
     case 'namesReset':
@@ -1564,21 +731,33 @@ function onAction(act) {
       renderOverlay();
       return;
     }
-    case 'next': nextRound(); return;
+    case 'next':
+      if (NET.on) { netSend({ t: 'next' }); return; }
+      UI.overlay = null; nextRound(); update(); return;
+    case 'friends': UI.netErr = null; UI.netBusy = false; openOverlay('friends'); return;
+    case 'createTable': createTable(); return;
+    case 'joinTable': joinTable(); return;
+    case 'rejoin': { const s = savedTable(); if (s && s.code && readOnlineName()) openTable(s.code); return; }
+    case 'share': shareTable(); return;
+    case 'copycode': copyCode(); return;
+    case 'startTable': netSend({ t: 'start' }); return;
+    case 'leaveTable': leaveTable(); return;
+    case 'askLeave': UI.overlay = 'confirmLeave'; renderOverlay(); return;
+    case 'imback': netSend({ t: 'back' }); return;
   }
   if (!R) return;
   switch (act) {
-    case 'bid': doBid(0, UI.bidPick); return;
-    case 'pass': doBid(0, null); return;
+    case 'bid': move('bid', UI.bidPick); return;
+    case 'pass': move('bid', null); return;
     case 'nt': UI.ntAsk = true; UI.sel = null; renderSheet(); renderHand(); return;
     case 'ntno': UI.ntAsk = false; renderSheet(); return;
-    case 'ntyes': UI.ntAsk = false; setTrump(0, 'NT'); return;
-    case 'settrump': if (UI.sel != null) setTrump(0, UI.sel); return;
-    case 'play': if (UI.sel != null) playCard(0, UI.sel); return;
-    case 'reveal': UI.sel = null; reveal(0); return;
+    case 'ntyes': UI.ntAsk = false; move('trump', 'NT'); return;
+    case 'settrump': if (UI.sel != null) move('trump', UI.sel); return;
+    case 'play': if (UI.sel != null) move('play', UI.sel); return;
+    case 'reveal': UI.sel = null; move('reveal'); return;
     case 'cot': {
       const key = `${G.roundNo}|${R.trickNo}|${R.plays.length}`;
-      if (UI.cotArm === key) { UI.cotArm = null; callCot(0); }
+      if (UI.cotArm === key) { UI.cotArm = null; move('cot'); }
       else { UI.cotArm = key; renderSheet(); }
       return;
     }
@@ -1589,23 +768,27 @@ function onCardTap(id) {
   const R = G.R;
   if (R.phase === 'trump' && R.bidder === 0) {
     UI.ntAsk = false;                                // tapping a card means "pick a card instead"
-    if (UI.sel === id) { setTrump(0, id); return; }
+    if (UI.sel === id) { move('trump', id); return; }
     UI.sel = id; renderSheet(); renderHand(); return;
   }
   if (R.phase !== 'play' || R.turn !== 0 || R.busy) return;
   const ok = legal(0).cards.some(c => c.id === id);
   if (!ok) { UI.shake = id; renderHand(); return; }
-  if (UI.sel === id) { playCard(0, id); return; }
+  if (UI.sel === id) { move('play', id); return; }
   UI.sel = id; renderSheet(); renderHand();
 }
 
 document.addEventListener('click', e => {
   const t = e.target.closest('button, .card');
   if (!t) {
-    if (e.target.id === 'overlay' && UI.overlay && UI.overlay !== 'intro' && UI.overlay !== 'round' && UI.overlay !== 'decided') onAction('back');
+    if (e.target.id === 'overlay' && UI.overlay && !['intro', 'round', 'decided', 'lobby'].includes(UI.overlay)) onAction('back');
     return;
   }
   if (t.dataset.act) { onAction(t.dataset.act); return; }
+  if (t.dataset.netscoring) { netSend({ t: 'settings', scoring: t.dataset.netscoring }); return; }
+  if (t.dataset.netteams) { netSend({ t: 'settings', teams: t.dataset.netteams }); return; }
+  if (t.dataset.netspeed) { netSend({ t: 'settings', speed: t.dataset.netspeed }); return; }
+  if (t.dataset.seat != null && NET.on) { netSend({ t: 'seat', seat: +t.dataset.seat }); return; }
   if (t.dataset.speed) {
     speed = t.dataset.speed;
     try { localStorage.setItem(SPEED_KEY, speed); } catch (err) { /* ignore */ }
@@ -1618,7 +801,7 @@ document.addEventListener('click', e => {
     // Switching mid-game starts a new match (the two scores can't be converted), so ask first.
     if (G && G.R && G.R.phase !== 'roundEnd' && UI.overlay !== 'intro') { UI.pendingScoring = want; UI.overlay = 'confirmScoring'; renderOverlay(); return; }
     setScoring(want);
-    if (G && UI.overlay !== 'intro') { if (TEAMS.drawn) newMatch(); else startDraw(); render(); }
+    if (G && UI.overlay !== 'intro') { if (TEAMS.drawn) startMatch(); else startDraw(); }
     else renderOverlay();
     return;
   }
@@ -1638,8 +821,275 @@ document.addEventListener('submit', e => {
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && UI.overlay && UI.overlay !== 'intro' && UI.overlay !== 'round' && UI.overlay !== 'decided') onAction('back');
+  if (e.key === 'Escape' && UI.overlay && !['intro', 'round', 'decided', 'lobby'].includes(UI.overlay)) onAction('back');
 });
+
+// =========================================================================
+//  Online play: friends at one table through the game server (server/src/index.js)
+//  The server sends each player their own view, turned so they sit at seat 0, so the
+//  table above draws it unchanged; our moves go to the server instead of the engine.
+// =========================================================================
+// The live server for the app and the public page; the test page (…/thuruppu/test/) uses the test server.
+const SERVER_DEFAULT = /\/thuruppu\/test\//.test(location.pathname)
+  ? 'https://thuruppu-test.kalpakastudiohq.workers.dev'
+  : 'https://thuruppu.kalpakastudiohq.workers.dev';
+const SHARE_PAGE = 'https://kalpaka-studio.github.io/thuruppu/play/';
+const ONLINE_KEY = 'thuruppu56.online';      // { code } of the table we're at, to rejoin after a reload
+const PID_KEY = 'thuruppu56.pid';            // a random id for this phone: how the table knows us again
+const ONAME_KEY = 'thuruppu56.onlineName';
+const NET = { on: false, ws: null, code: null, msg: null, status: 'off', retry: 0, retryTimer: null, ping: null, deadline: null, nextAt: null, round: 0, leaving: false };
+const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const lsSet = (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { /* ignore */ } };
+function serverURL() {
+  const q = new URLSearchParams(location.search).get('server');     // ?server=http://127.0.0.1:8787 for testing
+  if (q) lsSet('thuruppu56.server', q);
+  return lsGet('thuruppu56.server') || SERVER_DEFAULT;
+}
+function myPid() {
+  let id = lsGet(PID_KEY);
+  if (!id) { id = 'p' + Array.from(crypto.getRandomValues(new Uint8Array(12)), b => (b % 36).toString(36)).join(''); lsSet(PID_KEY, id); }
+  return id;
+}
+const onlineName = () => lsGet(ONAME_KEY) || (!NET.on && NAMES[0] !== 'You' ? NAMES[0] : '');
+const savedTable = () => { try { return JSON.parse(lsGet(ONLINE_KEY) || 'null'); } catch (e) { return null; } };
+const netSeat = p => NET.msg && NET.msg.seats[(p + NET.msg.you) % 6];
+function netSend(m) { try { if (NET.ws && NET.ws.readyState === 1) NET.ws.send(JSON.stringify(m)); } catch (e) { /* reconnects */ } }
+
+/** A move by you: to the server when online, straight to the engine when playing the bots. */
+function move(a, v) {
+  if (NET.on) { netSend({ t: 'act', a, v }); if (a === 'play') UI.sel = null; return; }
+  if (a === 'bid') doBid(0, v);
+  else if (a === 'trump') setTrump(0, v);
+  else if (a === 'play') { playCard(0, v); UI.sel = null; }
+  else if (a === 'reveal') reveal(0);
+  else if (a === 'cot') callCot(0);
+  update();
+}
+
+async function createTable() {
+  const name = readOnlineName();
+  if (!name) return;
+  UI.netErr = null; UI.netBusy = true; renderOverlay();
+  try {
+    const res = await fetch(serverURL() + '/rooms', { method: 'POST' });
+    if (!res.ok) throw new Error('server ' + res.status);
+    const { code } = await res.json();
+    openTable(code);
+  } catch (e) {
+    UI.netBusy = false; UI.netErr = "Couldn't reach the game server. Check your internet and try again."; renderOverlay();
+  }
+}
+function joinTable() {
+  const name = readOnlineName();
+  const code = ((document.getElementById('onCode') || {}).value || '').trim().toUpperCase();
+  if (!name) return;
+  if (!/^[A-Z0-9]{4}$/.test(code)) { UI.netErr = 'Enter the 4-letter table code, like KX7P.'; UI.joinCode = code; renderOverlay(); return; }
+  openTable(code);
+}
+function readOnlineName() {
+  const el = document.getElementById('onName');
+  const name = ((el && el.value) || '').trim().slice(0, NAME_MAX);
+  if (!name) { UI.netErr = 'Enter your name first.'; renderOverlay(); return null; }
+  if (/^(you|me|player)$/i.test(name)) { UI.netErr = 'Please enter your own name, so the others know who you are.'; renderOverlay(); return null; }
+  lsSet(ONAME_KEY, name);
+  return name;
+}
+
+function openTable(code) {
+  clearTimeout(timer);
+  if (G && !NET.on) save();                   // keep the game against the bots for later
+  Object.assign(NET, { on: true, code, msg: null, retry: 0, leaving: false, round: 0 });
+  lsSet(ONLINE_KEY, JSON.stringify({ code }));
+  UI.netErr = null; UI.netBusy = true;
+  connect();
+}
+function connect() {
+  clearTimeout(NET.retryTimer);
+  NET.status = 'connecting';
+  let ws;
+  try { ws = new WebSocket(serverURL().replace(/^http/, 'ws') + '/rooms/' + NET.code + '/ws'); }
+  catch (e) { return retryLater(); }
+  NET.ws = ws;
+  ws.onopen = () => {
+    NET.status = 'open'; NET.retry = 0;
+    netSend({ t: 'hello', pid: myPid(), name: onlineName() });
+    clearInterval(NET.ping);
+    NET.ping = setInterval(() => netSend({ t: 'ping' }), 25000);
+    if (G) renderSheet();
+  };
+  ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (err) { return; } onNetMessage(m); };
+  ws.onclose = e => {
+    if (NET.ws !== ws) return;
+    clearInterval(NET.ping);
+    if (!NET.on || NET.leaving) return;
+    if (e.code === 4004 || e.code === 4009 || e.code === 4001 || e.code === 4000) return;   // handled by the error message
+    retryLater();
+  };
+}
+function retryLater() {
+  if (!NET.on) return;
+  NET.status = 'retrying';
+  NET.retry = Math.min(NET.retry + 1, 5);
+  NET.retryTimer = setTimeout(connect, [0, 1000, 2000, 4000, 6000, 8000][NET.retry]);
+  if (G && NET.msg && NET.msg.phase === 'playing') renderSheet(); else renderOverlay();
+}
+function leaveTable(tellServer = true) {
+  if (tellServer) netSend({ t: 'leave' });
+  NET.leaving = true; NET.on = false; NET.status = 'off';
+  clearTimeout(NET.retryTimer); clearInterval(NET.ping);
+  try { NET.ws && NET.ws.close(1000); } catch (e) { /* ignore */ }
+  NET.ws = null; NET.msg = null; NET.code = null;
+  lsSet(ONLINE_KEY, null);
+  restoreLocal();
+  UI.overlay = 'intro'; overlayReturn = null;
+  if (G) { renderTop(); renderTable(); renderSheet(); renderHand(); }
+  renderOverlay();
+}
+/** Back from a table: our own names, teams and the game against the bots. */
+function restoreLocal() {
+  try { const s = JSON.parse(localStorage.getItem(NAMES_KEY) || 'null'); NAMES = Array.isArray(s) && s.length === 6 ? s.map(cleanName) : DEFAULT_NAMES.slice(); } catch (e) { NAMES = DEFAULT_NAMES.slice(); }
+  try { const t = JSON.parse(localStorage.getItem(TEAMS_KEY) || 'null'); TEAMS = t && (t.black === 0 || t.black === 1) ? { drawn: !!t.drawn, black: t.black } : { drawn: false, black: 0 }; } catch (e) { TEAMS = { drawn: false, black: 0 }; }
+  applyTeams();
+  const s = loadSaved();
+  G = s && (s.mode === 'kitty' || !(s.score[0] >= TARGET || s.score[1] >= TARGET)) ? s : null;
+}
+
+function onNetMessage(m) {
+  if (m.t === 'pong') return;
+  if (m.t === 'flash') { if (m.suit) flash(m.suit); else flashText(fmt(m.label || ''), fmt(m.big || '')); return; }
+  if (m.t === 'error') {
+    if (['noroom', 'full', 'replaced', 'badhello'].includes(m.code)) {
+      leaveTable(false);
+      UI.netErr = m.message; UI.netBusy = false; UI.joinCode = ''; UI.overlay = 'friends'; overlayReturn = 'intro';
+      renderOverlay();
+    }
+    return;
+  }
+  if (m.t !== 'room') return;
+  NET.msg = m; UI.netBusy = false;
+  NET.deadline = m.turnLeft != null ? Date.now() + m.turnLeft : null;
+  NET.nextAt = m.nextLeft != null ? Date.now() + m.nextLeft : null;
+  if (m.phase === 'lobby') {
+    if (!['lobby', 'rules', 'confirmLeave'].includes(UI.overlay)) { UI.overlay = 'lobby'; overlayReturn = null; }
+    renderOverlay();
+    return;
+  }
+  // Playing: show the table from our seat.
+  NAMES = [0, 1, 2, 3, 4, 5].map(i => m.seats[(i + m.you) % 6].name);   // real names for everyone, you included
+  TEAMS = { drawn: true, black: m.black };
+  applyTeams();
+  const g = m.game;
+  g.R.played = new Set();
+  G = g;
+  if (g.roundNo !== NET.round) { NET.round = g.roundNo; UI.sel = null; UI.bidPick = null; UI.ntAsk = false; UI.cotArm = null; }
+  const R = g.R;
+  const passing = ['lobby', 'friends', 'intro', 'decided', 'round', null];
+  if (R.phase === 'roundEnd') { if (passing.includes(UI.overlay)) UI.overlay = 'round'; }
+  else if (R.busy && R.decided) { if (passing.includes(UI.overlay)) UI.overlay = 'decided'; }
+  else if (passing.includes(UI.overlay)) UI.overlay = null;
+  render();
+}
+
+function shareTable() {
+  const code = NET.code;
+  // Share the page we're on (so the test page shares the test page); the app shares the public page.
+  const page = /^https?:$/.test(location.protocol) && location.hostname.endsWith('github.io') ? location.origin + location.pathname : SHARE_PAGE;
+  const link = `${page}?room=${code}`;
+  const text = `Join my Thuruppu 56 table! Tap ${link} or open the app and enter code ${code}.`;
+  if (navigator.share) { navigator.share({ title: 'Thuruppu 56', text }).catch(() => { /* cancelled */ }); return; }
+  window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank');
+}
+function copyCode() {
+  try { navigator.clipboard.writeText(NET.code); UI.copied = true; renderOverlay(); setTimeout(() => { UI.copied = false; if (UI.overlay === 'lobby') renderOverlay(); }, 1500); } catch (e) { /* no clipboard */ }
+}
+
+function friendsHTML() {
+  const saved = savedTable();
+  return `<div class="box friends"><h2>Play with friends</h2>
+    <p class="muted">Up to 6 people at one table, on any phone or computer. Empty seats are played by bots.</p>
+    <label class="field">Your name<input id="onName" maxlength="${NAME_MAX}" autocomplete="nickname" value="${esc(onlineName())}" placeholder="Name shown to the table"></label>
+    <button class="btn primary wide" data-act="createTable" ${UI.netBusy ? 'disabled' : ''}>Create a table</button>
+    <div class="or"><span>or join a friend's table</span></div>
+    <div class="row join">
+      <input id="onCode" class="code-in" maxlength="4" autocapitalize="characters" autocomplete="off" placeholder="CODE" value="${esc(UI.joinCode || '')}">
+      <button class="btn" data-act="joinTable" ${UI.netBusy ? 'disabled' : ''}>Join</button>
+    </div>
+    ${saved && saved.code ? `<button class="btn ghost wide" data-act="rejoin">Rejoin table ${esc(saved.code)}</button>` : ''}
+    ${UI.netBusy ? '<p class="muted center">Connecting…</p>' : ''}
+    ${UI.netErr ? `<p class="err">${esc(UI.netErr)}</p>` : ''}
+    <div class="row end"><button class="btn ghost" data-act="back">Back</button></div></div>`;
+}
+
+function lobbyHTML() {
+  const m = NET.msg;
+  if (!m) return `<div class="box lobby"><h2>Table ${esc(NET.code || '')}</h2><p class="muted center">${NET.status === 'retrying' ? 'Reconnecting…' : 'Connecting…'}</p>
+    <div class="row end"><button class="btn ghost" data-act="leaveTable">Leave</button></div></div>`;
+  const humans = m.seats.filter(s => s.human).length;
+  const host = m.seats.find(s => s.host);
+  const draw = m.settings.teams === 'draw';
+  const seatRow = (s, i) => {
+    const you = i === m.you;
+    const tags = [you ? 'you' : '', s.host ? 'host' : '', s.human && !s.connected ? 'offline' : ''].filter(Boolean).map(t => `<em class="lt ${t}">${t}</em>`).join('');
+    return `<button class="lseat ${s.human ? 'human' : 'bot'} ${you ? 'me' : ''} ${draw ? '' : 't' + (i % 2)}" data-seat="${i}" ${s.human ? 'disabled' : ''}>
+      <span class="ls-n">${i + 1}</span><span class="ls-name">${s.human ? esc(s.name) : `<span class="muted">Bot · ${esc(s.name)}</span>`}</span>${tags}</button>`;
+  };
+  const seg = (label, key, opts, cur) => `<div class="seg" role="group" aria-label="${label}"><span>${label}</span>
+    ${opts.map(([v, t]) => `<button class="segbtn ${cur === v ? 'on' : ''}" ${m.isHost ? `data-net${key}="${v}"` : 'disabled'}>${t}</button>`).join('')}</div>`;
+  return `<div class="box lobby">
+    <div class="lobby-head"><div><div class="muted small">Table code</div><div class="tcode">${esc(m.code)}</div></div>
+      <div class="col"><button class="btn primary" data-act="share">Share…</button><button class="btn ghost small" data-act="copycode">${UI.copied ? 'Copied!' : 'Copy code'}</button></div></div>
+    <p class="muted small">Friends open the link, or tap <b>Play with friends</b> in the app and enter the code.${NET.status !== 'open' ? ' <b>Reconnecting…</b>' : ''}</p>
+    <div class="lobby-seats">${m.seats.map(seatRow).join('')}</div>
+    <p class="muted small">${draw ? 'Teams are drawn with Aces when the game starts.' : 'Teams as seated: seats 1, 3, 5 against 2, 4, 6. Tap an empty seat to move.'}</p>
+    ${seg('Scoring', 'scoring', [['twelve', 'First to 12'], ['kitty', 'Kitty &amp; Joker']], m.settings.scoring)}
+    ${seg('Teams', 'teams', [['draw', 'Ace draw'], ['seats', 'As seated']], m.settings.teams)}
+    ${speedSeg(m.settings.speed || 'normal', m.isHost ? 'data-netspeed' : null)}
+    ${m.isHost
+      ? `<button class="btn primary wide" data-act="startTable">Start: ${humans} ${humans === 1 ? 'player' : 'players'}${humans < 6 ? ` + ${6 - humans} ${6 - humans === 1 ? 'bot' : 'bots'}` : ''}</button>`
+      : `<p class="center">Waiting for ${host ? esc(host.name) : 'the host'} to start…</p>`}
+    <div class="row end"><button class="btn ghost" data-act="rules">How to play</button><button class="btn ghost" data-act="leaveTable">Leave table</button></div></div>`;
+}
+
+/** Online extras on the sheet: reconnecting, "a bot is playing for you", and the turn clock. */
+function netSheetExtras() {
+  if (!NET.on || !NET.msg || NET.msg.phase !== 'playing') return;
+  const el = $('#sheet');
+  if (NET.msg.away) {
+    el.innerHTML = `<div class="sheet-head"><div class="sheet-title">A bot is playing for you</div>
+      <div class="sheet-sub">You missed two turns, so a bot took your seat for now.</div></div>
+      <div class="row"><button class="btn primary wide" data-act="imback">I'm back</button></div>`;
+    return;
+  }
+  const head = el.querySelector('.sheet-head');
+  if (NET.status !== 'open' && head) head.insertAdjacentHTML('afterbegin', '<div class="netwarn">Reconnecting…</div>');
+  if (NET.deadline && head) head.insertAdjacentHTML('beforeend', '<div class="tmr" id="tmr"></div>');
+  tickTimer();
+}
+function tickTimer() {
+  const t = document.getElementById('tmr');
+  if (t && NET.deadline) {
+    const s = Math.max(0, Math.ceil((NET.deadline - Date.now()) / 1000));
+    const mine = G && G.R && ((G.R.phase === 'trump' && G.R.bidder === 0) || (G.R.turn === 0 && G.R.phase !== 'trump'));
+    t.textContent = mine ? `${s}s left, then a bot plays this turn for you` : `${s}s`;
+    t.classList.toggle('low', s <= 10);
+  }
+  const n = document.getElementById('nextIn');
+  if (n && NET.nextAt) n.textContent = `Next round in ${Math.max(0, Math.ceil((NET.nextAt - Date.now()) / 1000))}s`;
+}
+setInterval(tickTimer, 1000);
+
+function onlineMenuHTML() {
+  return `<div class="box menu"><h2>Table ${esc(NET.code || '')}</h2>
+    <div class="col">
+      <button class="btn wide" data-act="share">Invite more friends</button>
+      <button class="btn wide" data-act="log">Game log</button>
+      <button class="btn wide" data-act="rules">How to play</button>
+      <button class="btn wide" data-act="askLeave">Leave table</button>
+      ${NET.msg ? speedSeg(NET.msg.settings.speed || 'normal', NET.msg.isHost ? 'data-netspeed' : null) : ''}
+      ${NET.msg && !NET.msg.isHost ? '<p class="muted small center">Only the host can change the bot speed.</p>' : ''}
+      <button class="btn primary wide" data-act="back">Back to table</button>
+    </div>${versionHTML()}</div>`;
+}
 
 // ---------- Boot ----------
 function start(data) {
@@ -1650,8 +1100,24 @@ function start(data) {
   saved = loadSaved();
   if (saved && (saved.mode === 'kitty' || !(saved.score[0] >= TARGET || saved.score[1] >= TARGET))) G = saved;
   UI.overlay = 'intro';
+  // A shared link (…/play/?room=KX7P) opens straight onto the join screen.
+  serverURL();                                   // remember a ?server= test address before the address is tidied
+  const room = new URLSearchParams(location.search).get('room');
+  if (room && /^[A-Za-z0-9]{4}$/.test(room)) {
+    UI.joinCode = room.toUpperCase(); UI.overlay = 'friends'; overlayReturn = 'intro';
+    try { history.replaceState(null, '', location.pathname); } catch (e) { /* ignore */ }
+  }
   if (G) { renderTop(); renderTable(); renderSheet(); renderHand(); }
   renderOverlay();
+}
+
+/** The round summary at an online table: who we're still waiting for, and the auto-start clock. */
+function roundWaitHTML() {
+  const m = NET.msg;
+  if (!m) return '';
+  const waiting = m.seats.filter(s => s.human && s.connected && !s.away && !s.ready).map(s => esc(s.name));
+  return `<p class="muted small center">${m.seats[m.you].ready ? (waiting.length ? `Waiting for ${waiting.join(', ')}…` : 'Starting…') : 'Tap Next round when you are ready.'}
+    <br><span id="nextIn"></span></p>`;
 }
 
 // ---------- Native app (Android / iOS via Capacitor). Does nothing in a browser. ----------
@@ -1665,7 +1131,7 @@ function start(data) {
     // Phone back button: close a panel first; at the table open the menu rather than quitting mid-game.
     App.addListener('backButton', () => {
       if (UI.overlay === 'decided') return;          // the early-finish reveal moves on by itself
-      if (UI.overlay && UI.overlay !== 'intro' && UI.overlay !== 'round' && UI.overlay !== 'decided') onAction('back');
+      if (UI.overlay && !['intro', 'round', 'decided', 'lobby'].includes(UI.overlay)) onAction('back');
       else if (G && UI.overlay !== 'intro') onAction('menu');
       else App.exitApp();
     });
