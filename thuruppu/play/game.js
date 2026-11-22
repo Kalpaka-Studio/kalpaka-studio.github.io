@@ -36,7 +36,7 @@ applyTeams();
 // The one version for the web link and the Android/iOS app (shown in the menu).
 // android/app/build.gradle reads `name` and `build` from this line, so keep its shape.
 // Bump `build` on every publish; bump `name` for each release (1.0.2 -> 1.0.3 for fixes, 1.1.0 for features).
-const APP_VERSION = { name: '1.4.0', build: 13, date: '22 Nov 2026', note: 'Play with friends online; slow bot speed; Kitty & Joker by default' };
+const APP_VERSION = { name: '1.4.0', build: 14, date: '22 Nov 2026', note: 'Play with friends online; slow bot speed; Kitty & Joker by default' };
 // How long each automatic step waits (ms). The online server uses the same multipliers (SPEED_X there).
 const SPEEDS = {
   slow: { bot: 1500, trick: 2500, botCard: 1100, decided: 3400 },
@@ -675,6 +675,15 @@ function rulesHTML() {
   <p><b>First to 12</b> (Scoring setting): game points add up and the first team to ${TARGET} wins the match.</p>
   <p><b>Kitty &amp; Joker</b>: each team starts with a kitty of 7 cards. After each round the losing team pays the winners as many kitty cards as the game points. A team that runs out gets a <b>Joker</b> on every member (Jokers add up) and the kitty is shared out 7 and 7 again. Kitty cards are in team colours: a team that pays gives back the other team's cards first, so a kitty of 10 shows as 7 of its own colour plus 3 won. To remove Jokers, the team must win the bidding and make the bid (any bid, Thani or a made COT): in the very first round after its latest Joker, every member removes one; after that, only the player who made the winning bid removes one of their own.</p>
   <p><b>Career score</b> (in the menu and the round summary): every round's game points keep adding up in the background, whichever scoring you play. A new Ace draw starts it again.</p>
+  <h3 id="friendsHelp">Playing with friends</h3>
+  <p>Up to 6 people can play at one table, each on their own phone or computer. Empty seats are played by bots, so 2 to 6 people works. You need an internet connection; playing against the bots works offline as before.</p>
+  <p><b>1. Create a table.</b> Tap <b>Play with friends</b>, type your name (everyone at the table sees it), and tap <b>Create a table</b>. You get a 4-letter table code, such as <b>KX7P</b>. You are the <b>host</b>.</p>
+  <p><b>2. Invite.</b> Tap <b>Share…</b> to send the invite on WhatsApp or any other app. It contains a link and the code. Or tap <b>Copy code</b> and tell people the code.</p>
+  <p><b>3. Join.</b> Friends tap the link to play in their browser (iPhone too), or open the app, tap <b>Play with friends</b>, type their name and the code, and tap <b>Join</b>. Everyone who joins appears in a seat. Seats left empty are bots.</p>
+  <p><b>4. Start.</b> Only the host chooses the <b>scoring</b>, the <b>teams</b> (drawn with Aces, or as seated: seats 1, 3, 5 against 2, 4, 6; tap an empty seat to move) and the <b>bot speed</b>, then taps <b>Start</b>. The host can change the bot speed during the game from the menu. Others can still join a game in progress by taking a bot's seat.</p>
+  <p><b>Your turn.</b> You have <b>45 seconds</b> for each turn; after that a bot plays that one turn for you. Miss two turns in a row and a bot takes over your seat until you tap <b>I'm back</b>. After each round, the next one starts when everyone taps <b>Next round</b>, or after 25 seconds.</p>
+  <p><b>If you drop out.</b> If your phone loses signal or you close the app, the game carries on: your turns wait only 12 seconds, then a bot plays them. Open the game again and tap <b>Play with friends → Rejoin table</b> (or open the link again) to take your seat back with your own cards. If everyone leaves, the table pauses after 45 seconds and carries on when someone returns.</p>
+  <p><b>Leaving.</b> Use <b>Leave table</b> in the menu. If the host leaves, another player becomes host. A table closes by itself after a day without play.</p>
   <div class="row end"><button class="btn primary" data-act="back">Got it</button></div></div>`;
 }
 
@@ -717,6 +726,12 @@ function onAction(act) {
     case 'resume': { const s = loadSaved(); if (s) resume(s); else startMatch(); return; }
     case 'menu': openOverlay('menu'); return;
     case 'rules': case 'log': case 'names': openOverlay(act); return;
+    case 'friendsHelp': {     // How to play, opened at the "Playing with friends" part
+      openOverlay('rules');
+      const h = document.getElementById('friendsHelp');
+      if (h) h.scrollIntoView({ block: 'start' });
+      return;
+    }
     case 'namesReset':
       DEFAULT_NAMES.forEach((n, i) => { const el = document.getElementById('name' + i); if (el) el.value = i === 0 ? '' : n; });
       return;
@@ -726,8 +741,9 @@ function onAction(act) {
       if (UI.overlay === 'draw') { clearInterval(drawTimer); UI.draw = null; }
       const prev = overlayReturn;
       overlayReturn = null;
-      UI.overlay = (prev === 'intro' || prev === 'round') ? prev : null;
-      if (!G) UI.overlay = 'intro';
+      UI.overlay = ['intro', 'round', 'friends', 'lobby'].includes(prev) ? prev : null;
+      if (prev === 'friends') overlayReturn = 'intro';          // the friends screen's own Back still goes home
+      if (!G && !UI.overlay) UI.overlay = 'intro';
       renderOverlay();
       return;
     }
@@ -1017,7 +1033,7 @@ function friendsHTML() {
     ${saved && saved.code ? `<button class="btn ghost wide" data-act="rejoin">Rejoin table ${esc(saved.code)}</button>` : ''}
     ${UI.netBusy ? '<p class="muted center">Connecting…</p>' : ''}
     ${UI.netErr ? `<p class="err">${esc(UI.netErr)}</p>` : ''}
-    <div class="row end"><button class="btn ghost" data-act="back">Back</button></div></div>`;
+    <div class="row end"><button class="btn ghost" data-act="friendsHelp">How it works</button><button class="btn ghost" data-act="back">Back</button></div></div>`;
 }
 
 function lobbyHTML() {
